@@ -89,3 +89,4 @@ Thumbs.db
 
 docker/dl-resources/*
 !docker/dl-resources/list.md
+!docker/dl-resources/mergehex.tar.bz2
