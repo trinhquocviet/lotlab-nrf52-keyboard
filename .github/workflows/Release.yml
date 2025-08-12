@@ -43,7 +43,7 @@ jobs:
         cd ../
     - name: Build
       run: |
-        cd keyboard
+        cd keyboard/lot60-ble
         make -j
         cd ../
     - name: Upload
