@@ -46,6 +46,6 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          keyboard/_build/*.zip
-          keyboard/_build/*.hex
-          keyboard/_build/*.bin
+          keyboard/lot60-ble/_build/*.zip
+          keyboard/lot60-ble/_build/*.hex
+          keyboard/lot60-ble/_build/*.bin
