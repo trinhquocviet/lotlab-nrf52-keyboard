@@ -52,12 +52,12 @@ uint8_t devices_id = 0;
  * COMMAND延迟处理事件
  */
 enum command_delay_hander_event {
-    COMMAND_DFU,         //跳转Bootloader
-    COMMAND_SLEEP,       //手动休眠
-    COMMAND_SYSTEMOFF,   //手动关机
-    COMMAND_DEL_STORAGE, //清空配置存储
-    COMMAND_BOND,        //清空绑定
-    COMMAND_SWITCH       //切换蓝牙设备
+    COMMAND_DFU,         //Enter to Bootloader | 跳转Bootloader
+    COMMAND_SLEEP,       //Manual sleep | 手动休眠
+    COMMAND_SYSTEMOFF,   //Manual shutdown | 手动关机
+    COMMAND_DEL_STORAGE, //Clear the configuration store | 清空配置存储
+    COMMAND_BOND,        //Clear Binding | 清空绑定
+    COMMAND_SWITCH       //Switch Bluetooth devices | 切换蓝牙设备
 };
 
 /**
@@ -172,11 +172,12 @@ static bool command_common(uint8_t code)
 #endif
         break;
     case KC_O:
-        //清空绑定数据
+        // Clear binding data | 清空绑定数据
         clear_keyboard();
         app_timer_start(command_run_timer, APP_TIMER_TICKS(200), (void*)(uint32_t)COMMAND_BOND);
         break;
-#ifdef MULTI_DEVICE_SWITCH //多设备切换：支持3台设备切换
+#ifdef MULTI_DEVICE_SWITCH
+    // Multi-device switching: supports switching between 3 devices | 多设备切换：支持3台设备切换
     case KC_Q:
         clear_keyboard();
         devices_id = 0;

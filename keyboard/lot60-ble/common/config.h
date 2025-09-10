@@ -74,7 +74,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 // 需要输入配对码
 // #define PASSKEY_REQUIRED
 
-// 启用多设备切换
+// Enable multi-device BLE switching | 启用多设备切换
 #define MULTI_DEVICE_SWITCH
 
 // 启用看门狗
@@ -100,7 +100,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #define UART_BAUDRATE NRF_UART_BAUDRATE_115200
 
-#define LED_POSITIVE // LED上拉驱动
+#define LED_POSITIVE // LED pull-up driver | LED上拉驱动
 
 #define NRF_BL_ERASE_PIN UART_RXD
 #define NRF_BL_DFU_ENTER_METHOD_PINRESET 1
