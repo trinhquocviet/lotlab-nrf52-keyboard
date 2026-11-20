@@ -256,16 +256,24 @@ static void set_device_name(void)
 
     BLE_GAP_CONN_SEC_MODE_SET_OPEN(&sec_mode);
 
+    size_t orig_len = strlen(DEVICE_NAME);
 #ifdef MACADDR_SEPRATOR
-    int orig_len = strlen(DEVICE_NAME);
-    int name_len = orig_len + 8;
-    char device_name[name_len];
-    get_device_name(device_name, orig_len);
-
-    err_code = sd_ble_gap_device_name_set(&sec_mode, (const uint8_t*)device_name, strlen(device_name));
+    char device_name[orig_len + 10];
+    get_device_name(device_name, (int)orig_len);
 #else
-    err_code = sd_ble_gap_device_name_set(&sec_mode, (const uint8_t*)DEVICE_NAME, strlen(DEVICE_NAME));
+    char device_name[orig_len + 4];
+    strcpy(device_name, DEVICE_NAME);
 #endif
+#ifdef MULTI_DEVICE_SWITCH
+    uint8_t dev_id = (switch_device_data.data != NULL && switch_storage->id < MAX_HOST_COUNT)
+        ? switch_storage->id
+        : 0;
+    size_t cur_len = strlen(device_name);
+    device_name[cur_len] = '-';
+    device_name[cur_len + 1] = (char)('0' + dev_id);
+    device_name[cur_len + 2] = '\0';
+#endif
+    err_code = sd_ble_gap_device_name_set(&sec_mode, (const uint8_t*)device_name, strlen(device_name));
     APP_ERROR_CHECK(err_code);
 }
 
@@ -322,9 +330,33 @@ static void set_gap_addr_by_id(uint8_t id)
     APP_ERROR_CHECK(ret);
 }
 
+static void advertising_update_data(void)
+{
+    ble_advdata_t advdata;
+    memset(&advdata, 0, sizeof(advdata));
+
+    advdata.name_type = BLE_ADVDATA_FULL_NAME;
+    advdata.include_appearance = true;
+    advdata.flags = BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE;
+    advdata.uuids_complete.uuid_cnt = sizeof(m_adv_uuids) / sizeof(m_adv_uuids[0]);
+    advdata.uuids_complete.p_uuids = m_adv_uuids;
+
+    m_advertising.adv_data.adv_data.len = BLE_GAP_ADV_SET_DATA_SIZE_MAX;
+    ret_code_t err_code = ble_advdata_encode(
+        &advdata,
+        m_advertising.adv_data.adv_data.p_data,
+        &m_advertising.adv_data.adv_data.len);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = ble_advertising_advdata_update(&m_advertising, &m_advertising.adv_data, true);
+    APP_ERROR_CHECK(err_code);
+}
+
 static void switch_device_select_after(void* p_data, uint16_t len)
 {
     set_gap_addr_by_id(switch_storage->id);
+    set_device_name();
+    advertising_update_data();
 
     reenable_advertising();
     // 触发蓝牙设备通道切换事件
@@ -338,8 +370,8 @@ static void switch_device_select_after(void* p_data, uint16_t len)
  */
 void switch_device_select(uint8_t id)
 {
-    // 如果重复切换，则直接退出，不做任何操作
-    if (id == switch_storage->id)
+    // 如果重复切换或超出范围，则直接退出，不做任何操作
+    if (id >= MAX_HOST_COUNT || id == switch_storage->id)
         return;
 
     switch_storage->id = id;
