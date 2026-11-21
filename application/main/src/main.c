@@ -94,6 +94,7 @@
 #include "keyboard/ble_keyboard.h"
 #include "keyboard/data_storage.h"
 #include "keyboard/keyboard_bootcheck.h"
+#include "keyboard/sleep_reason.h"
 #include "keyboard/keyboard_command.h"
 #include "keyboard/keyboard_evt.h"
 #include "keyboard/keyboard_led.h"
@@ -274,6 +275,7 @@ void sleep(enum SLEEP_REASON reason)
         sleep_mode_enter(false);
         break;
     case SLEEP_NOT_PWRON:
+        sleep_reason_set(false);
         sleep_mode_enter(true);
         break;
     default:
@@ -346,6 +348,8 @@ int main(void)
     advertising_start(erase_bonds);
 
     set_stage(KBD_STATE_INITED);
+    // Mark this boot as active so soft resets do not lock behind Space+U.
+    sleep_reason_set(true);
 
     // Enter main loop.
     for (;;) {

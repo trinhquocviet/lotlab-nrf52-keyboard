@@ -8,6 +8,7 @@
  * @param color 
  */
 void keyboard_led_rgb_set(uint32_t color);
+void keyboard_led_rgb_set_raw(uint32_t color);
 void keyboard_led_rgb_direct(uint32_t color);
 
 /**
