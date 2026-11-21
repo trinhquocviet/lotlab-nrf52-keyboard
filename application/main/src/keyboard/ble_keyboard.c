@@ -180,7 +180,9 @@ void keyboard_debounce(void)
 {
     // 启用消抖定时器，使用快速扫描间隔扫描
     ret_code_t err_code = app_timer_start(m_keyboard_debounce_timer, DEBOUNCE_INTERVAL, NULL);
-    APP_ERROR_CHECK(err_code);
+    if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_NO_MEM && err_code != NRF_ERROR_INVALID_STATE) {
+        APP_ERROR_CHECK(err_code);
+    }
 }
 
 /**

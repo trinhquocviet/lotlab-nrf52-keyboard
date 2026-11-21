@@ -59,9 +59,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define APP_ADV_SLOW_DURATION 18000 /**< The advertising duration of slow advertising in units of 10 milliseconds. */
 
 /*lint -emacro(524, MIN_CONN_INTERVAL) // Loss of precision */
-#define MIN_CONN_INTERVAL MSEC_TO_UNITS(15, UNIT_1_25_MS) /**< Minimum connection interval (15 ms) */
-#define MAX_CONN_INTERVAL MSEC_TO_UNITS(30, UNIT_1_25_MS) /**< Maximum connection interval (30 ms). */
-#define SLAVE_LATENCY 15 /**< Slave latency. */
+#define MIN_CONN_INTERVAL MSEC_TO_UNITS(12, UNIT_1_25_MS) /**< Minimum connection interval (11.25-12 ms) */
+#define MAX_CONN_INTERVAL MSEC_TO_UNITS(15, UNIT_1_25_MS) /**< Maximum connection interval (15 ms). */
+#define SLAVE_LATENCY 6 /**< Slave latency. */
 #define CONN_SUP_TIMEOUT MSEC_TO_UNITS(4000, UNIT_10_MS) /**< Connection supervisory timeout (4000 ms). */
 
 uint16_t m_conn_handle = BLE_CONN_HANDLE_INVALID; /**< Handle of the current connection. */
@@ -356,7 +356,9 @@ static void reenable_advertising()
 
     if (m_conn_handle == BLE_CONN_HANDLE_INVALID) {
         ret_code_t ret = ble_advertising_start(&m_advertising, BLE_ADV_MODE_FAST);
-        APP_ERROR_CHECK(ret);
+        if (ret != NRF_SUCCESS && ret != NRF_ERROR_INVALID_STATE) {
+            APP_ERROR_CHECK(ret);
+        }
     }
 }
 
@@ -760,6 +762,13 @@ static void dfu_init(void)
  */
 static void conn_params_error_handler(uint32_t nrf_error)
 {
+    if (nrf_error == NRF_ERROR_INVALID_STATE
+        || nrf_error == BLE_ERROR_INVALID_CONN_HANDLE
+        || nrf_error == NRF_ERROR_BUSY
+        || nrf_error == NRF_ERROR_NO_MEM
+        || nrf_error == NRF_ERROR_TIMEOUT) {
+        return;
+    }
     APP_ERROR_HANDLER(nrf_error);
 }
 
@@ -877,26 +886,36 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
  * @param old 旧的句柄
  * @param new 新的句柄
  */
+static uint8_t current_tx = 2; // +4 dBm default
+
+/**
+ * @brief BLE 连接句柄改变处理器
+ * 
+ * @param old 旧的句柄
+ * @param new 新的句柄
+ */
 static void ble_conn_handle_change(uint16_t old, uint16_t new)
 {
     if (old != BLE_CONN_HANDLE_INVALID) {
         sd_ble_gap_rssi_stop(old);
     }
     if (new != BLE_CONN_HANDLE_INVALID) {
+        current_tx = 2; // +4 dBm
+        (void)sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_CONN, new, 4);
         sd_ble_gap_rssi_start(new, 5, 5);
     }
 }
 
-static uint8_t current_tx = 6; // 0dbm default.
-
 /**
- * @brief RSSI 改变事件处理器
+ * @brief RSSI 改变事件处理器 (floor at 0 dBm so RF link stays resilient)
  * 
  * @param rssi 
  */
 static void ble_rssi_change(int8_t rssi)
 {
-    const int8_t tx_power_table[] = { -40, -20, -16, -12, -8, -4, 0, 3, 4 };
+    const int8_t tx_power_table[] = { 0, 3, 4 };
+    if (m_conn_handle == BLE_CONN_HANDLE_INVALID)
+        return;
     if (rssi >= -65 && current_tx > 0)
         current_tx--;
     else if (rssi <= -80 && current_tx < sizeof(tx_power_table) - 1)
@@ -904,7 +923,7 @@ static void ble_rssi_change(int8_t rssi)
     else
         return;
 
-    sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_CONN, m_conn_handle, tx_power_table[current_tx]);
+    (void)sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_CONN, m_conn_handle, tx_power_table[current_tx]);
 }
 #else
 #define ble_conn_handle_change(A, B)
@@ -949,7 +968,10 @@ static void ble_evt_handler(ble_evt_t const* p_ble_evt, void* p_context)
             .tx_phys = BLE_GAP_PHY_AUTO,
         };
         err_code = sd_ble_gap_phy_update(p_ble_evt->evt.gap_evt.conn_handle, &phys);
-        APP_ERROR_CHECK(err_code);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE
+            && err_code != BLE_ERROR_INVALID_CONN_HANDLE) {
+            APP_ERROR_CHECK(err_code);
+        }
     } break;
 
     case BLE_GATTS_EVT_HVN_TX_COMPLETE:
@@ -960,14 +982,20 @@ static void ble_evt_handler(ble_evt_t const* p_ble_evt, void* p_context)
         // Disconnect on GATT Client timeout event.
         err_code = sd_ble_gap_disconnect(p_ble_evt->evt.gattc_evt.conn_handle,
             BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
-        APP_ERROR_CHECK(err_code);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE
+            && err_code != BLE_ERROR_INVALID_CONN_HANDLE) {
+            APP_ERROR_CHECK(err_code);
+        }
         break;
 
     case BLE_GATTS_EVT_TIMEOUT:
         // Disconnect on GATT Server timeout event.
         err_code = sd_ble_gap_disconnect(p_ble_evt->evt.gatts_evt.conn_handle,
             BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
-        APP_ERROR_CHECK(err_code);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE
+            && err_code != BLE_ERROR_INVALID_CONN_HANDLE) {
+            APP_ERROR_CHECK(err_code);
+        }
         break;
 
     case BLE_GAP_EVT_AUTH_KEY_REQUEST:
@@ -1051,6 +1079,12 @@ static void peer_manager_init(void)
  */
 static void ble_advertising_error_handler(uint32_t nrf_error)
 {
+    if (nrf_error == NRF_ERROR_INVALID_STATE
+        || nrf_error == BLE_ERROR_INVALID_CONN_HANDLE
+        || nrf_error == NRF_ERROR_CONN_COUNT
+        || nrf_error == NRF_ERROR_NO_MEM) {
+        return;
+    }
     APP_ERROR_HANDLER(nrf_error);
 }
 
@@ -1082,11 +1116,9 @@ static void advertising_init(void)
 
     m_advertising_initialized = 1;
     ble_advertising_conn_cfg_tag_set(&m_advertising, APP_BLE_CONN_CFG_TAG);
-#ifdef HIGH_TX_POWER
-    //更改发射功率到+4dBm
+    // Use +4 dBm for advertising so reconnects after link loss succeed reliably.
     err_code = sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_ADV, m_advertising.adv_handle, 4);
     APP_ERROR_CHECK(err_code);
-#endif
 }
 
 void ble_passkey_send(uint8_t const* p_key)

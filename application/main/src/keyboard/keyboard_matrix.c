@@ -81,7 +81,11 @@ void matrix_init(void)
             NRF_GPIO_PIN_DIR_OUTPUT,
             NRF_GPIO_PIN_INPUT_DISCONNECT,
             NRF_GPIO_PIN_NOPULL,
+#ifdef ROW_IN
+            NRF_GPIO_PIN_H0H1,
+#else
             NRF_GPIO_PIN_S0S1,
+#endif
             NRF_GPIO_PIN_NOSENSE);
 #ifdef ROW_IN
         nrf_gpio_pin_set(pin);
@@ -145,7 +149,7 @@ static inline void delay_us(void)
 #endif
 
 #ifndef MATRIX_SCAN_DELAY_CYCLE
-#define MATRIX_SCAN_DELAY_CYCLE 36
+#define MATRIX_SCAN_DELAY_CYCLE 128
 #endif
     for (int i = 0; i < MATRIX_SCAN_DELAY_CYCLE; i++) {
         __nop(); //64mhz, 64cycle = 1us

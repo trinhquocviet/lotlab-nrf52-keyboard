@@ -15,17 +15,20 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include <string.h>
 #include <strings.h>
 
+#include "action.h"
 #include "app_error.h"
 #include "ble.h"
 #include "ble_hid_descriptor.h"
 #include "ble_hids.h"
 
+#include "../protocol/usb_comm.h"
 #include "ble_config.h"
 #include "ble_hid_service.h"
 
-#define MAX_BUFFER_ENTRIES 5 /**< Number of elements that can be enqueued */
+#define MAX_BUFFER_ENTRIES 16 /**< Number of elements that can be enqueued */
 #define BASE_USB_HID_SPEC_VERSION 0x0101 /**< Version number of base USB HID Specification implemented by this application. */
 
 #define INPUT_REP_KEYBOARD_ID 0x7f /**< Id of reference to Keyboard Input Report. */
@@ -93,24 +96,27 @@ static bool m_in_boot_mode = false; /**< Current protocol mode. */
 
 /** Provide status of data list is full or not */
 #define BUFFER_LIST_FULL() \
-    ((MAX_BUFFER_ENTRIES == buffer_list.count - 1) ? true : false)
+    (buffer_list.count >= MAX_BUFFER_ENTRIES)
 
 /** Provides status of buffer list is empty or not */
 #define BUFFER_LIST_EMPTY() \
-    ((0 == buffer_list.count) ? true : false)
+    (0 == buffer_list.count)
 
-#define BUFFER_ELEMENT_INIT(i)                 \
-    do {                                       \
-        buffer_list.buffer[(i)].p_data = NULL; \
+#define BUFFER_ELEMENT_INIT(i)                                              \
+    do {                                                                    \
+        buffer_list.buffer[(i)].p_instance = NULL;                          \
+        buffer_list.buffer[(i)].data_len = 0;                               \
+        memset(buffer_list.buffer[(i)].data, 0, INPUT_REPORT_LEN_KEYBOARD); \
     } while (0)
 
 /** @} */
 
-/** Abstracts buffer element */
+/** Abstracts buffer element (owns an inline copy of the HID report payload) */
 typedef struct hid_key_buffer {
     uint8_t index; /**< Report Index */
     uint8_t data_len; /**< Total length of data */
-    uint8_t* p_data; /**< Scanned key pattern */
+    uint8_t data[INPUT_REPORT_LEN_KEYBOARD]; /**< Copied HID report bytes */
+    uint16_t reserved; /**< 4-byte alignment padding */
     ble_hids_t* p_instance; /**< Identifies peer and service instance */
 } buffer_entry_t;
 
@@ -123,6 +129,7 @@ typedef struct
     uint8_t rp; /**< Index to the read location */
     uint8_t wp; /**< Index to write location */
     uint8_t count; /**< Number of elements in the list */
+    uint8_t reserved; /**< 4-byte alignment padding */
 } buffer_list_t;
 
 STATIC_ASSERT(sizeof(buffer_list_t) % 4 == 0);
@@ -230,6 +237,10 @@ static uint32_t send_key(ble_hids_t* p_hids,
     uint8_t* pattern,
     uint8_t len)
 {
+    if (m_conn_handle == BLE_CONN_HANDLE_INVALID) {
+        return NRF_ERROR_INVALID_STATE;
+    }
+
     ret_code_t err_code = NRF_SUCCESS;
     if (m_in_boot_mode) {
         if (index == 0) {
@@ -282,28 +293,35 @@ static uint32_t buffer_enqueue(ble_hids_t* p_hids,
     uint16_t pattern_len)
 {
     buffer_entry_t* element;
-    uint32_t err_code = NRF_SUCCESS;
+
+    if (p_key_pattern == NULL || pattern_len == 0) {
+        return NRF_ERROR_INVALID_PARAM;
+    }
+
+    uint8_t copy_len = (pattern_len > INPUT_REPORT_LEN_KEYBOARD)
+        ? INPUT_REPORT_LEN_KEYBOARD
+        : (uint8_t)pattern_len;
 
     if (BUFFER_LIST_FULL()) {
-        // Element cannot be buffered.
-        err_code = NRF_ERROR_NO_MEM;
+        // Overwrite the newest queued entry so the latest state (especially key-up) is never dropped.
+        uint8_t last = (uint8_t)((buffer_list.wp + MAX_BUFFER_ENTRIES - 1) % MAX_BUFFER_ENTRIES);
+        element = &buffer_list.buffer[last];
     } else {
-        // Make entry of buffer element and copy data.
-        element = &buffer_list.buffer[(buffer_list.wp)];
-        element->p_instance = p_hids;
-        element->p_data = p_key_pattern;
-        element->index = report_index;
-        element->data_len = pattern_len;
-
+        element = &buffer_list.buffer[buffer_list.wp];
         buffer_list.count++;
         buffer_list.wp++;
-
         if (buffer_list.wp == MAX_BUFFER_ENTRIES) {
             buffer_list.wp = 0;
         }
     }
 
-    return err_code;
+    element->p_instance = p_hids;
+    element->index = report_index;
+    element->data_len = copy_len;
+    memset(element->data, 0, INPUT_REPORT_LEN_KEYBOARD);
+    memcpy(element->data, p_key_pattern, copy_len);
+
+    return NRF_SUCCESS;
 }
 
 /**@brief   Function to dequeue key scan patterns that could not be transmitted either completely of
@@ -330,9 +348,9 @@ static uint32_t buffer_dequeue(bool tx_flag)
         if (tx_flag) {
             err_code = send_key(p_element->p_instance,
                 p_element->index,
-                p_element->p_data,
+                p_element->data,
                 p_element->data_len);
-            if (err_code == NRF_ERROR_RESOURCES) {
+            if (err_code == NRF_ERROR_RESOURCES || err_code == NRF_ERROR_BUSY) {
                 // Transmission could not be completed, do not remove the entry
                 remove_element = false;
             }
@@ -371,18 +389,24 @@ void keys_send(uint8_t report_id, uint8_t key_pattern_len, uint8_t* p_key_patter
     if (report_index == INPUT_REP_INDEX_INVALID)
         return;
 
-    err_code = send_key(&m_hids, report_index, p_key_pattern, key_pattern_len);
-    // check if send success, otherwise enqueue this.
-    if (err_code == NRF_ERROR_RESOURCES) {
-        // Buffer enqueue routine return value is not intentionally checked.
-        // Rationale: Its better to have a a few keys missing than have a system
-        // reset. Recommendation is to work out most optimal value for
-        // MAX_BUFFER_ENTRIES to minimize chances of buffer queue full condition
+    if (m_conn_handle == BLE_CONN_HANDLE_INVALID)
+        return;
+
+    // Preserve strict FIFO ordering if prior reports are still queued.
+    if (!BUFFER_LIST_EMPTY()) {
         UNUSED_VARIABLE(buffer_enqueue(&m_hids, report_index, p_key_pattern, key_pattern_len));
+        while (!BUFFER_LIST_EMPTY()) {
+            if (buffer_dequeue(true) != NRF_SUCCESS) {
+                break;
+            }
+        }
+        return;
     }
 
-    if ((err_code != NRF_SUCCESS) && (err_code != NRF_ERROR_INVALID_STATE) && (err_code != NRF_ERROR_RESOURCES) && (err_code != NRF_ERROR_BUSY) && (err_code != BLE_ERROR_GATTS_SYS_ATTR_MISSING) && (err_code != NRF_ERROR_FORBIDDEN)) {
-        APP_ERROR_HANDLER(err_code);
+    err_code = send_key(&m_hids, report_index, p_key_pattern, key_pattern_len);
+    // Transient SoftDevice backpressure or state changes must never reset the keyboard.
+    if (err_code == NRF_ERROR_RESOURCES || err_code == NRF_ERROR_BUSY) {
+        UNUSED_VARIABLE(buffer_enqueue(&m_hids, report_index, p_key_pattern, key_pattern_len));
     }
 }
 
@@ -452,10 +476,22 @@ void hid_service_init(ble_srv_error_handler_t err_handler)
 void hid_event_handler(enum user_event evt, void* arg)
 {
     uint8_t subevt = (uint32_t)arg;
-    if (evt == USER_EVT_BLE_STATE_CHANGE && subevt == BLE_STATE_DISCONNECT)
-        buffer_dequeue(false); // 断开后清空所有未发送的按键
-    else if (evt == USER_EVT_INTERNAL && subevt == INTERNAL_EVT_GATTS_TX_COMPLETE)
-        buffer_dequeue(true); // 发送完毕后出队列
+    if (evt == USER_EVT_BLE_STATE_CHANGE && subevt == BLE_STATE_DISCONNECT) {
+        buffer_init(); // Drop all stale queued reports on disconnect
+#ifdef HAS_USB
+        if (!usb_working()) {
+            clear_keyboard();
+        }
+#else
+        clear_keyboard();
+#endif
+    } else if (evt == USER_EVT_INTERNAL && subevt == INTERNAL_EVT_GATTS_TX_COMPLETE) {
+        while (!BUFFER_LIST_EMPTY()) {
+            if (buffer_dequeue(true) != NRF_SUCCESS) {
+                break;
+            }
+        }
+    }
 }
 
 /**
