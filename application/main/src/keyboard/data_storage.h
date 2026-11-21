@@ -18,6 +18,28 @@
 #define KEYMAP_ROW_SIZE (MATRIX_COLS * SINGLE_KEY_SIZE)
 #define KEYMAP_LAYER_SIZE (MATRIX_ROWS * KEYMAP_ROW_SIZE)
 
+// Extended device configuration record (0x0498, 24 bytes = 6 words)
+#define EXT_CONFIG_MAGIC 0xA5
+#define EXT_CONFIG_VERSION 0x01
+#define MAX_CUSTOM_NAME_BYTES 16
+#define CHANNEL_PROFILE_COUNT 4
+
+// Channel profile byte masks (channel: 0=BLE0, 1=BLE1, 2=BLE2, 3=USB)
+#define CH_BASE_LAYER_MASK 0x07
+#define CH_SWAP_LALT_LGUI 0x08
+#define CH_SWAP_RALT_RGUI 0x10
+#define CH_SWAP_LCTL_LGUI 0x20
+#define CH_NO_GUI 0x40
+
+typedef struct __attribute__((packed)) {
+    uint8_t magic;
+    uint8_t version;
+    uint8_t name_len;
+    uint8_t reserved;
+    uint8_t custom_name[MAX_CUSTOM_NAME_BYTES];
+    uint8_t channel_profile[CHANNEL_PROFILE_COUNT];
+} ext_config_t;
+
 /**
  * @brief 存储类型
  * 
@@ -35,6 +57,11 @@ bool storage_write(uint8_t mask);
 void storage_delete(uint8_t mask);
 uint16_t storage_read_data(enum storage_type type, uint16_t offset, uint16_t len, uint8_t* data);
 uint16_t storage_write_data(enum storage_type type, uint16_t offset, uint16_t len, uint8_t* data);
+
+ext_config_t* storage_get_ext_config(void);
+uint8_t keyboard_active_base_layer(void);
+uint8_t keyboard_active_swap_flags(void);
+void keyboard_set_active_profile(uint8_t base_layer, uint8_t swap_flags);
 
 // 若启用了BOOTMAGIC_ENABLE则自动启用CONFIG_STORAGE
 #ifdef BOOTMAGIC_ENABLE

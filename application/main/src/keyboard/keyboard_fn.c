@@ -82,13 +82,15 @@ __attribute__((weak)) void action_function(keyrecord_t* record, uint8_t id, uint
 #endif
 #ifdef MULTI_DEVICE_SWITCH
             case SWITCH_DEVICE_BLE_0: // Switch Bluetooth devices | 蓝牙设备的切换
-                // todo: Clear current keys before switching | 切换前清除当前按键
+                clear_keyboard();
                 switch_device_select(0);
                 break;
             case SWITCH_DEVICE_BLE_1:
+                clear_keyboard();
                 switch_device_select(1);
                 break;
             case SWITCH_DEVICE_BLE_2:
+                clear_keyboard();
                 switch_device_select(2);
                 break;
             case SWITCH_DEVICE_BLE_REBOND:

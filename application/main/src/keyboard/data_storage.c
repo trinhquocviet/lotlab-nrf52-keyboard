@@ -58,9 +58,57 @@ REGISTER_FDS_BLOCK(keymap, KEYMAP_SIZE_WORD, KEYMAP_RECORD_KEY)
 
 static bool keymap_valid = true;
 static bool volatile s_fds_initialized;
+static uint8_t s_active_base_layer = 0;
+static uint8_t s_active_swap_flags = 0;
 __attribute__((weak)) const uint8_t keymaps_count = 2;
 __attribute__((weak)) const uint8_t fn_actions_count = 8;
 __attribute__((weak)) void store_config_load_defaults(void) { }
+
+uint8_t keyboard_active_base_layer(void)
+{
+    return s_active_base_layer;
+}
+
+uint8_t keyboard_active_swap_flags(void)
+{
+    return s_active_swap_flags;
+}
+
+void keyboard_set_active_profile(uint8_t base_layer, uint8_t swap_flags)
+{
+    s_active_base_layer = (base_layer < MAX_LAYER) ? base_layer : 0;
+    s_active_swap_flags = swap_flags;
+}
+
+static uint8_t apply_channel_swaps(uint8_t kc)
+{
+    uint8_t flags = s_active_swap_flags;
+    if (flags == 0)
+        return kc;
+
+    if (flags & CH_SWAP_LALT_LGUI) {
+        if (kc == KC_LALT)
+            kc = KC_LGUI;
+        else if (kc == KC_LGUI)
+            kc = KC_LALT;
+    }
+    if (flags & CH_SWAP_RALT_RGUI) {
+        if (kc == KC_RALT)
+            kc = KC_RGUI;
+        else if (kc == KC_RGUI)
+            kc = KC_RALT;
+    }
+    if (flags & CH_SWAP_LCTL_LGUI) {
+        if (kc == KC_LCTRL)
+            kc = KC_LGUI;
+        else if (kc == KC_LGUI)
+            kc = KC_LCTRL;
+    }
+    if ((flags & CH_NO_GUI) && (kc == KC_LGUI || kc == KC_RGUI)) {
+        return KC_NO;
+    }
+    return kc;
+}
 
 static void check_keymap()
 {
@@ -74,14 +122,28 @@ static void check_keymap()
 }
 #define USE_KEYMAP keymap_valid
 #ifndef ACTIONMAP_ENABLE
+static uint8_t read_raw_keymap_byte(uint8_t layer, keypos_t key)
+{
+    if (USE_KEYMAP)
+        return keymap_block[layer * KEYMAP_LAYER_SIZE + key.row * MATRIX_COLS + key.col];
+    return (layer < keymaps_count) ? keymaps[layer][key.row][key.col] : KC_NO;
+}
+
 uint8_t keymap_key_to_keycode(uint8_t layer, keypos_t key)
 {
     if (layer >= MAX_LAYER || key.col >= MATRIX_COLS || key.row >= MATRIX_ROWS)
         return KC_NO;
-    if (USE_KEYMAP)
-        return keymap_block[layer * KEYMAP_LAYER_SIZE + key.row * MATRIX_COLS + key.col];
-    else
-        return keymaps[layer][key.row][key.col];
+
+    uint8_t kc;
+    if (layer == 0 && s_active_base_layer > 0 && s_active_base_layer < MAX_LAYER) {
+        kc = read_raw_keymap_byte(s_active_base_layer, key);
+        if (kc == KC_TRNS) {
+            kc = read_raw_keymap_byte(0, key);
+        }
+    } else {
+        kc = read_raw_keymap_byte(layer, key);
+    }
+    return apply_channel_swaps(kc);
 }
 #else
 extern const action_t actionmaps[][MATRIX_ROWS][MATRIX_COLS];
@@ -159,6 +221,23 @@ const macro_t* action_get_macro(keyrecord_t* record, uint8_t id, uint8_t opt)
 
 REGISTER_FDS_BLOCK(config, CONFIG_BLOCK_SIZE_WORD, CONFIG_RECORD_KEY)
 CONFIG_SECTION_DEF();
+
+#define EXT_CONFIG_SIZE_WORD GET_WORD(sizeof(ext_config_t))
+#define EXT_CONFIG_RECORD_KEY 0x0498
+REGISTER_FDS_BLOCK(ext_config, EXT_CONFIG_SIZE_WORD, EXT_CONFIG_RECORD_KEY)
+
+static void ext_config_reset_defaults(void)
+{
+    memset(ext_config_block, 0, sizeof(ext_config_t));
+    ext_config_t* cfg = (ext_config_t*)ext_config_block;
+    cfg->magic = EXT_CONFIG_MAGIC;
+    cfg->version = EXT_CONFIG_VERSION;
+}
+
+ext_config_t* storage_get_ext_config(void)
+{
+    return (ext_config_t*)ext_config_block;
+}
 
 /**
  * @brief 存储初始化，分配指针
@@ -386,6 +465,12 @@ void storage_read(uint8_t mask)
     if (mask & 0x08) {
         storage_read_inner(&config_record, &config_record_desc);
         store_config_load_defaults();
+        storage_read_inner(&ext_config_record, &ext_config_record_desc);
+        ext_config_t* ext = (ext_config_t*)ext_config_block;
+        if (ext->magic != EXT_CONFIG_MAGIC || ext->version != EXT_CONFIG_VERSION
+            || ext->name_len > MAX_CUSTOM_NAME_BYTES) {
+            ext_config_reset_defaults();
+        }
     }
 #endif
 }
@@ -415,6 +500,8 @@ void storage_delete(uint8_t mask)
 #ifdef CONFIG_STORAGE
     if (mask & 0x08) {
         fds_record_delete(&config_record_desc);
+        fds_record_delete(&ext_config_record_desc);
+        ext_config_reset_defaults();
     }
 #endif
 }
@@ -462,6 +549,7 @@ bool storage_write(uint8_t mask)
 #ifdef CONFIG_STORAGE
     if (mask & 0x08) {
         storage_update_inner(&config_record, &config_record_desc);
+        storage_update_inner(&ext_config_record, &ext_config_record_desc);
     }
 #endif
 

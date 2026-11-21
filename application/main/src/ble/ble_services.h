@@ -49,3 +49,6 @@ void ble_stack_init(void);
 void ble_passkey_send(uint8_t const * p_key);
 
 void advertising_slow(void);
+
+uint8_t switch_device_get_id(void);
+void ble_device_name_refresh(void);

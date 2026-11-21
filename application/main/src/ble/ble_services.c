@@ -39,6 +39,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "ble_config.h"
 #include "data_storage.h"
+#include "store_config.h"
 #include "util.h"
 #include <string.h>
 
@@ -245,36 +246,82 @@ static void get_device_name(char* device_name, int offset)
 }
 #endif
 
+static uint8_t m_advertising_initialized = 0;
+
+uint8_t switch_device_get_id(void)
+{
+#ifdef MULTI_DEVICE_SWITCH
+    if (switch_device_data.data != NULL && switch_storage->magic == SWITCH_ID_MAGIC
+        && switch_storage->id < MAX_HOST_COUNT) {
+        return switch_storage->id;
+    }
+#endif
+    return 0;
+}
+
+static void set_default_device_name(void)
+{
+    ret_code_t err_code;
+    ble_gap_conn_sec_mode_t sec_mode;
+    BLE_GAP_CONN_SEC_MODE_SET_OPEN(&sec_mode);
+
+    char device_name[24];
+    memset(device_name, 0, sizeof(device_name));
+#ifdef MACADDR_SEPRATOR
+    size_t orig_len = strlen(DEVICE_NAME);
+    if (orig_len <= 12) {
+        get_device_name(device_name, (int)orig_len);
+    } else {
+        strncpy(device_name, DEVICE_NAME, 12);
+    }
+#else
+    strncpy(device_name, DEVICE_NAME, 16);
+#endif
+#ifdef MULTI_DEVICE_SWITCH
+    uint8_t dev_id = switch_device_get_id();
+    size_t cur_len = strlen(device_name);
+    if (cur_len + 2 < sizeof(device_name)) {
+        device_name[cur_len] = '_';
+        device_name[cur_len + 1] = (char)('0' + dev_id);
+        device_name[cur_len + 2] = '\0';
+    }
+#endif
+    err_code = sd_ble_gap_device_name_set(&sec_mode, (const uint8_t*)device_name, strlen(device_name));
+    APP_ERROR_CHECK(err_code);
+}
+
 /**
- * @brief 设置蓝牙设备的名称
+ * @brief 设置蓝牙设备的名称 (fixed 24-byte stack buffer, _0/_1/_2 suffix)
  * 
  */
 static void set_device_name(void)
 {
-    ret_code_t err_code;
-    ble_gap_conn_sec_mode_t sec_mode;
+    uint8_t custom_len = 0;
+    char device_name[24];
+    memset(device_name, 0, sizeof(device_name));
 
+    custom_len = store_config_get_ble_name((uint8_t*)device_name, MAX_CUSTOM_NAME_BYTES);
+    if (custom_len == 0) {
+        set_default_device_name();
+        return;
+    }
+
+    ble_gap_conn_sec_mode_t sec_mode;
     BLE_GAP_CONN_SEC_MODE_SET_OPEN(&sec_mode);
 
-    size_t orig_len = strlen(DEVICE_NAME);
-#ifdef MACADDR_SEPRATOR
-    char device_name[orig_len + 10];
-    get_device_name(device_name, (int)orig_len);
-#else
-    char device_name[orig_len + 4];
-    strcpy(device_name, DEVICE_NAME);
-#endif
 #ifdef MULTI_DEVICE_SWITCH
-    uint8_t dev_id = (switch_device_data.data != NULL && switch_storage->id < MAX_HOST_COUNT)
-        ? switch_storage->id
-        : 0;
-    size_t cur_len = strlen(device_name);
-    device_name[cur_len] = '-';
-    device_name[cur_len + 1] = (char)('0' + dev_id);
-    device_name[cur_len + 2] = '\0';
+    uint8_t dev_id = switch_device_get_id();
+#else
+    uint8_t dev_id = 0;
 #endif
-    err_code = sd_ble_gap_device_name_set(&sec_mode, (const uint8_t*)device_name, strlen(device_name));
-    APP_ERROR_CHECK(err_code);
+    device_name[custom_len] = '_';
+    device_name[custom_len + 1] = (char)('0' + dev_id);
+    device_name[custom_len + 2] = '\0';
+
+    ret_code_t err_code = sd_ble_gap_device_name_set(&sec_mode, (const uint8_t*)device_name, custom_len + 2);
+    if (err_code != NRF_SUCCESS) {
+        set_default_device_name();
+    }
 }
 
 /**
@@ -346,10 +393,28 @@ static void advertising_update_data(void)
         &advdata,
         m_advertising.adv_data.adv_data.p_data,
         &m_advertising.adv_data.adv_data.len);
+    if (err_code == NRF_ERROR_DATA_SIZE) {
+        set_default_device_name();
+        m_advertising.adv_data.adv_data.len = BLE_GAP_ADV_SET_DATA_SIZE_MAX;
+        err_code = ble_advdata_encode(
+            &advdata,
+            m_advertising.adv_data.adv_data.p_data,
+            &m_advertising.adv_data.adv_data.len);
+    }
     APP_ERROR_CHECK(err_code);
 
     err_code = ble_advertising_advdata_update(&m_advertising, &m_advertising.adv_data, true);
-    APP_ERROR_CHECK(err_code);
+    if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE) {
+        APP_ERROR_CHECK(err_code);
+    }
+}
+
+void ble_device_name_refresh(void)
+{
+    set_device_name();
+    if (m_advertising_initialized && m_conn_handle == BLE_CONN_HANDLE_INVALID) {
+        advertising_update_data();
+    }
 }
 
 static void switch_device_select_after(void* p_data, uint16_t len)
@@ -1015,6 +1080,7 @@ static void advertising_init(void)
     err_code = ble_advertising_init(&m_advertising, &init);
     APP_ERROR_CHECK(err_code);
 
+    m_advertising_initialized = 1;
     ble_advertising_conn_cfg_tag_set(&m_advertising, APP_BLE_CONN_CFG_TAG);
 #ifdef HIGH_TX_POWER
     //更改发射功率到+4dBm
