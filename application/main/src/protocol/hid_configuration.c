@@ -10,6 +10,8 @@
 #include "action.h"
 #include "data_storage.h"
 #include "keymap.h"
+#include "store_config.h"
+#include "../ble/ble_services.h"
 
 #define HID_PROTOCOL 5
 #define MAX_HID_PACKET_SIZE current_packet_size
@@ -48,6 +50,7 @@ const uint32_t keyboard_function_table =
 #endif
 #ifdef CONFIG_STORAGE
     (1 << 11) +
+    (1 << 12) +
 #endif
 #ifdef RGBLIGHT_ENABLE
     (1 << 16) +
@@ -233,6 +236,18 @@ static void get_all_fns(uint8_t offset)
 static void get_single_config(uint8_t id)
 {
 #ifdef CONFIG_STORAGE
+    if (id == 0x13) {
+        uint8_t buf[1 + MAX_CUSTOM_NAME_BYTES] = { 0 };
+        buf[0] = store_config_get_ble_name(&buf[1], MAX_CUSTOM_NAME_BYTES);
+        hid_response_success(sizeof(buf), buf);
+        return;
+    }
+    if (id == 0x14) {
+        uint8_t buf[CHANNEL_PROFILE_COUNT] = { 0 };
+        store_config_get_channel_profiles(buf);
+        hid_response_success(sizeof(buf), buf);
+        return;
+    }
     struct hid_config_section* item = hid_config_get(id);
     if (item == 0) {
         hid_response_generic(HID_RESP_PARAMETER_ERROR);
@@ -353,6 +368,25 @@ static void set_all_fns(uint8_t id, uint8_t len, uint8_t* data)
 static void set_single_config(uint8_t id, uint8_t len, uint8_t* data)
 {
 #ifdef CONFIG_STORAGE
+    if (id == 0x13) {
+        bool overflow = false;
+        if (store_config_set_ble_name(data, len, &overflow)) {
+            hid_response_generic(HID_RESP_SUCCESS);
+        } else {
+            hid_response_generic(overflow ? HID_RESP_WRITE_OVERFLOW : HID_RESP_PARAMETER_ERROR);
+        }
+        return;
+    }
+    if (id == 0x14) {
+        if (len != CHANNEL_PROFILE_COUNT) {
+            hid_response_generic(HID_RESP_WRITE_OVERFLOW);
+        } else if (store_config_set_channel_profiles(data)) {
+            hid_response_generic(HID_RESP_SUCCESS);
+        } else {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        }
+        return;
+    }
     struct hid_config_section* item = hid_config_get(id);
     if (item == 0) {
         hid_response_generic(HID_RESP_PARAMETER_ERROR);
@@ -404,6 +438,10 @@ static void write_data(uint8_t type)
 static void read_data(uint8_t type)
 {
     storage_read(type);
+    if (type & 0x08) {
+        ble_device_name_refresh();
+        keyboard_profile_apply_active();
+    }
     hid_response_generic(HID_RESP_SUCCESS);
 }
 

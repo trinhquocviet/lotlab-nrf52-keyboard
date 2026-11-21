@@ -43,6 +43,7 @@
 - `Fn + X`: Toggle NKRO (`0xF100`)
 - `Fn + R`: Clear / Re-bond current BLE slot (`0xF701`)
 - `Fn + T` / `Fn + Y` / `Fn + U`: Switch BLE Host Profile `0` / `1` / `2` (`0xF801` / `0xF901` / `0xFA01`)
+- **Per-Profile BLE Name (`v1.2.2.0+`)**: Advertises `Lot60.G_XXXXXX-0`, `Lot60.G_XXXXXX-1`, `Lot60.G_XXXXXX-2` dynamically when switching BLE profiles (`ble_services.c`).
 
 ### Optimizations & Fixes in `v1.2.1.0` (`nRF52810` / `rev_g`)
 - **RAM Safety & Headroom**:
