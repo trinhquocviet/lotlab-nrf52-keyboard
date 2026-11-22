@@ -62,6 +62,7 @@ static bool s_led_timer_created = false;
 static bool s_ble_adv_active = false;
 static enum ble_led_phase s_ble_led_phase = BLE_LED_IDLE;
 static uint8_t s_blinks_left = 0;
+static uint8_t s_blink_channel = 0xFF;
 
 /**
  * @brief 按状态更改 LED 样式
@@ -83,13 +84,13 @@ static void led_status_change()
     }
 }
 
-static uint8_t current_ble_channel_blinks(void)
+static uint8_t current_ble_channel(void)
 {
 #ifdef MULTI_DEVICE_SWITCH
     uint8_t ch = switch_device_get_id();
-    return (ch < 3) ? (uint8_t)(ch + 1U) : 1U;
+    return (ch < 3) ? ch : 0U;
 #else
-    return 1U;
+    return 0U;
 #endif
 }
 
@@ -100,6 +101,7 @@ static void ble_channel_led_stop(void)
     }
     s_ble_led_phase = BLE_LED_IDLE;
     s_blinks_left = 0;
+    s_blink_channel = 0xFF;
 }
 
 static void ble_channel_led_start(void)
@@ -109,8 +111,10 @@ static void ble_channel_led_start(void)
         return;
     }
 
+    uint8_t ch = current_ble_channel();
     ble_channel_led_stop();
-    s_blinks_left = current_ble_channel_blinks();
+    s_blink_channel = ch;
+    s_blinks_left = (uint8_t)(ch + 1U);
     s_ble_led_phase = BLE_LED_BLINK_ON;
     keyboard_led_rgb_set_raw(COLOR_BLE);
     (void)app_timer_start(m_ble_channel_led_timer, APP_TIMER_TICKS(BLE_LED_BLINK_ON_MS), NULL);
@@ -132,8 +136,16 @@ static void ble_channel_led_step(void* p_data, uint16_t len)
         if (s_blinks_left > 0) {
             s_blinks_left--;
         }
-        s_ble_led_phase = BLE_LED_BLINK_OFF;
-        (void)app_timer_start(m_ble_channel_led_timer, APP_TIMER_TICKS(BLE_LED_BLINK_OFF_MS), NULL);
+        if (s_blinks_left > 0 || ble_connected) {
+            s_ble_led_phase = BLE_LED_BLINK_OFF;
+            (void)app_timer_start(m_ble_channel_led_timer, APP_TIMER_TICKS(BLE_LED_BLINK_OFF_MS), NULL);
+        } else if (s_ble_adv_active) {
+            s_ble_led_phase = BLE_LED_REPEAT_PAUSE;
+            (void)app_timer_start(m_ble_channel_led_timer, APP_TIMER_TICKS(BLE_LED_REPEAT_PAUSE_MS), NULL);
+        } else {
+            s_ble_led_phase = BLE_LED_IDLE;
+            s_blink_channel = 0xFF;
+        }
         break;
 
     case BLE_LED_BLINK_OFF:
@@ -308,14 +320,20 @@ void rgb_led_event_handler(enum user_event event, void* arg)
             break;
         }
         break;
-    case USER_EVT_BLE_DEVICE_SWITCH: // 设备切换事件
+    case USER_EVT_BLE_DEVICE_SWITCH: { // 设备切换事件
+        uint8_t ch = current_ble_channel();
         s_ble_adv_active = true;
         if (!usb_working && leds_inited) {
-            ble_channel_led_start();
+            if (s_ble_led_phase == BLE_LED_IDLE
+                || s_ble_led_phase == BLE_LED_REPEAT_PAUSE
+                || s_blink_channel != ch) {
+                ble_channel_led_start();
+            }
         } else {
             led_status_change();
         }
         break;
+    }
     case USER_EVT_BLE_PASSKEY_STATE: // 请求Passkey
         ble_channel_led_stop();
         switch (arg2) {

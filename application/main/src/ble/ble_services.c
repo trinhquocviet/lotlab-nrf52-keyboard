@@ -474,22 +474,27 @@ static void advertising_update_data(void)
             &m_advertising.adv_data.adv_data.len);
     }
     APP_ERROR_CHECK(err_code);
-
-    if (m_advertising_initialized && m_advertising.adv_mode_current != BLE_ADV_MODE_IDLE) {
-        err_code = ble_advertising_advdata_update(&m_advertising, &m_advertising.adv_data, true);
-        if (err_code != NRF_SUCCESS
-            && err_code != NRF_ERROR_INVALID_STATE
-            && err_code != BLE_ERROR_GAP_DISCOVERABLE_WITH_WHITELIST) {
-            APP_ERROR_CHECK(err_code);
-        }
-    }
 }
 
 void ble_device_name_refresh(void)
 {
     set_device_name();
-    if (m_advertising_initialized && m_conn_handle == BLE_CONN_HANDLE_INVALID) {
+    if (!m_advertising_initialized) {
+        return;
+    }
+    if (m_conn_handle != BLE_CONN_HANDLE_INVALID) {
+        // Advertising is idle while connected; update encoded adv payload for the next adv cycle.
         advertising_update_data();
+        return;
+    }
+    ble_adv_mode_t prev_mode = m_advertising.adv_mode_current;
+    adv_stop_if_active();
+    advertising_update_data();
+    if (prev_mode != BLE_ADV_MODE_IDLE) {
+        ret_code_t err_code = ble_advertising_start(&m_advertising, prev_mode);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE) {
+            APP_ERROR_CHECK(err_code);
+        }
     }
 }
 
