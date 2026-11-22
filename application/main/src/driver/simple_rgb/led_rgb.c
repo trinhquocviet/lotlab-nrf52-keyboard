@@ -222,13 +222,3 @@ void keyboard_led_rgb_switch(bool on)
         keyboard_led_lppwm_stop();
     }
 }
-
-void keyboard_led_rgb_set_raw(uint32_t color)
-{
-    keyboard_led_rgb_set_internal(color);
-    if (color != 0) {
-        keyboard_led_lppwm_start();
-    } else {
-        keyboard_led_lppwm_stop();
-    }
-}
