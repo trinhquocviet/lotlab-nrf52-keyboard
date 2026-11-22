@@ -210,7 +210,7 @@ static void hids_init(ble_srv_error_handler_t err_handler)
     hids_init_obj.rep_map.data_len = sizeof(hid_descriptor);
     hids_init_obj.rep_map.p_data = (uint8_t*)hid_descriptor;
     hids_init_obj.hid_information.bcd_hid = BASE_USB_HID_SPEC_VERSION;
-    hids_init_obj.hid_information.b_country_code = 0x21; // United States (ANSI), USB HID 1.11 §6.2.1
+    hids_init_obj.hid_information.b_country_code = 0;
     hids_init_obj.hid_information.flags = HID_INFO_FLAG_REMOTE_WAKE_MSK | HID_INFO_FLAG_NORMALLY_CONNECTABLE_MSK;
     hids_init_obj.included_services_count = 0;
     hids_init_obj.p_included_services_array = NULL;
