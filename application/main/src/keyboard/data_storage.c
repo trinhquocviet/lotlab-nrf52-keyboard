@@ -173,12 +173,16 @@ REGISTER_FDS_BLOCK(fn, FN_BLOCK_SIZE_WORD, FN_RECORD_KEY)
 
 action_t keymap_fn_to_action(uint8_t keycode)
 {
+    uint8_t fn_idx = FN_INDEX(keycode);
     if (USE_KEYMAP) {
-        uint8_t index = FN_INDEX(keycode) * 2;
+        if (fn_idx >= MAX_FN_KEYS) {
+            return (action_t)ACTION_NO;
+        }
+        uint8_t index = (uint8_t)(fn_idx * 2U);
         uint16_t action = UINT16_READ(fn_block, index);
         return (action_t)action;
-    } else
-        return fn_actions[FN_INDEX(keycode)];
+    }
+    return (fn_idx < fn_actions_count) ? fn_actions[fn_idx] : (action_t)ACTION_NO;
 }
 #endif
 #endif
@@ -306,17 +310,16 @@ static void storage_callback(fds_evt_t const* p_evt)
                 }
                 if (err_code == FDS_SUCCESS) {
                     gc_queue_pop();
-                } else {
+                } else if (err_code == FDS_ERR_NO_SPACE_IN_FLASH) {
                     // 没有空间了，尝试GC
-                    if (err_code == FDS_ERR_NO_SPACE_IN_FLASH) {
-                        fds_gc();
-                        break;
-                    }
-                    // 操作队列没有空间了，等会再说
-                    if (err_code == FDS_ERR_NO_SPACE_IN_QUEUES) {
-                        break;
-                        // todo: 等有空间再重新调用？
-                    }
+                    (void)fds_gc();
+                    break;
+                } else if (err_code == FDS_ERR_NO_SPACE_IN_QUEUES || err_code == FDS_ERR_BUSY) {
+                    // 操作队列暂时满/忙，等待后续重试
+                    break;
+                } else {
+                    // Drop unrecoverable FDS op to avoid an infinite loop inside FDS_EVT_GC.
+                    gc_queue_pop();
                 }
             }
         }
@@ -363,10 +366,22 @@ static void storage_callback_init()
  */
 static void storage_update_inner(fds_record_t const* record, fds_record_desc_t* record_desc)
 {
+    // Skip redundant flash writes when RAM data already matches flash content.
+    fds_flash_record_t flash_record = { 0 };
+    if (fds_record_open(record_desc, &flash_record) == FDS_SUCCESS) {
+        bool unchanged = (flash_record.p_header != NULL
+            && flash_record.p_header->length_words == record->data.length_words
+            && memcmp(flash_record.p_data, record->data.p_data, record->data.length_words * 4) == 0);
+        (void)fds_record_close(record_desc);
+        if (unchanged) {
+            return;
+        }
+    }
+
     ret_code_t err_code = fds_record_update(record_desc, record);
     if (err_code == FDS_ERR_NO_SPACE_IN_FLASH) {
         // 没有空间则GC
-        err_code = fds_gc();
+        (void)fds_gc();
         struct fds_update_op item = {
             .record = record,
             .record_desc = record_desc,
@@ -609,10 +624,10 @@ uint16_t storage_read_data(enum storage_type type, uint16_t offset, uint16_t len
     uint8_t* pointer = 0;
     uint16_t size = storage_get_data_pointer(type, &pointer);
 
-    if (pointer == 0)
+    if (pointer == 0 || data == NULL || offset >= size)
         return 0;
 
-    if (size < len + offset)
+    if (len > size - offset)
         len = size - offset;
 
     memcpy(data, &pointer[offset], len);
@@ -633,10 +648,10 @@ uint16_t storage_write_data(enum storage_type type, uint16_t offset, uint16_t le
     uint8_t* pointer = 0;
     uint16_t size = storage_get_data_pointer(type, &pointer);
 
-    if (pointer == 0)
+    if (pointer == 0 || data == NULL || offset >= size)
         return 0;
 
-    if (size < len + offset)
+    if (len > size - offset)
         len = size - offset;
 
     memcpy(&pointer[offset], data, len);

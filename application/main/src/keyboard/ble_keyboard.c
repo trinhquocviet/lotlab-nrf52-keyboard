@@ -94,9 +94,12 @@ static void keyboard_sleep_handler(void* p_context)
     if (powersave)
         sleep_counter++;
 
-    if (sleep_counter == get_slow_scan_timeout()) {
+    uint16_t slow_timeout = get_slow_scan_timeout();
+    uint16_t sleep_timeout = get_sleep_timeout();
+    if (slow_timeout > 0 && sleep_counter == slow_timeout) {
         keyboard_switch_scan_mode(true);
-    } else if (sleep_counter == get_sleep_timeout()) {
+    }
+    if (sleep_timeout > 0 && sleep_counter == sleep_timeout) {
         sleep(SLEEP_TIMEOUT);
     }
 
@@ -110,7 +113,8 @@ static void keyboard_sleep_handler(void* p_context)
  */
 static void keyboard_sleep_counter_reset(void)
 {
-    if (sleep_counter >= get_slow_scan_timeout()) {
+    uint16_t slow_timeout = get_slow_scan_timeout();
+    if (slow_timeout > 0 && sleep_counter >= slow_timeout) {
         keyboard_switch_scan_mode(false);
     }
     sleep_counter = 0;

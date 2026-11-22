@@ -97,9 +97,14 @@ void hid_response_success(uint8_t len, uint8_t* data)
         return;
 
     uint8_t buff[63];
+    if (len > sizeof(buff) - 2) {
+        len = sizeof(buff) - 2;
+    }
     buff[0] = 0x00;
     buff[1] = len;
-    memcpy(&buff[2], data, len);
+    if (len > 0 && data != NULL) {
+        memcpy(&buff[2], data, len);
+    }
     last_driver->send_packet(PACKET_CONF, len + 2, buff);
 }
 
@@ -145,7 +150,7 @@ static void send_information_sub_1()
 
     ble_gap_addr_t ble_addr;
     sd_ble_gap_addr_get(&ble_addr);
-    memcpy(info, ble_addr.addr, sizeof(ble_addr));
+    memcpy(info, ble_addr.addr, BLE_GAP_ADDR_LEN);
 
     info[6] = current_packet_size;
     info[7] = 0;

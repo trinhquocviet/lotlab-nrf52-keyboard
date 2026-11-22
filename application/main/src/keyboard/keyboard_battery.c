@@ -44,7 +44,7 @@ static void calculate_battery_persentage(struct BatteryInfo* info)
 
 static void adc_result_handler(nrf_saadc_value_t value)
 {
-    adc_buffer[adc_buffer_index++] = value;
+    adc_buffer[adc_buffer_index++] = (value > 0) ? (uint16_t)value : 0;
     if (adc_buffer_index >= ADC_BUFFER_SIZE) {
         adc_buffer_index = 0;
 
