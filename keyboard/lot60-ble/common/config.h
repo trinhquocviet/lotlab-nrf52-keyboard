@@ -26,6 +26,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define CONF_VENDOR_ID 0x0514 /* 配置项目内显示的VendorID */
 #define CONF_PRODUCT_ID 0x0114 /* 配置项目内显示的ProductID */
 #define MANUFACTURER "Lotlab" /* 硬件制造商，用于蓝牙显示 */
+#define DEVICE_BLE_APPEARANCE BLE_APPEARANCE_HID_KEYBOARD /* GAP Keyboard appearance (0x03C1) */
 
 #define MACADDR_SEPRATOR '_' /* 蓝牙名称后地址的分隔符。若不设置则不显示蓝牙名称后面的地址 */
 

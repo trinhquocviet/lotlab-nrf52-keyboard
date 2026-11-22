@@ -2,6 +2,7 @@
 
 #define PRODUCT "Lot60.G" /* 硬件名称，用于蓝牙显示 */
 #define DEVICE_VER 0x0003 /* 硬件版本 */
+#define HARDWARE_REV_STR "Rev.G"
 
 #define LED_CAPS 19
 #define LED_RGB_R 24
@@ -34,5 +35,7 @@ static const uint8_t column_pin_array[MATRIX_COLS] = { 16, 15, 14, 13, 12, 11, 2
 #define LED_DFU_FINISH 24
 // #define LED_DFU_POSITIVE
 
-// 不存在Bootloader，设置Bootloader的地址到更高的区域以防止出现问题
+// Guard bootloader address for nRF52810 builds only (nRF52832 S132 app starts at 0x26000)
+#if !defined(NRF52832_XXAA)
 #define CUSTOM_BOOTLOADER_ADDR 0x2F000
+#endif

@@ -230,26 +230,13 @@ bool store_config_set_channel_profiles(const uint8_t data[CHANNEL_PROFILE_COUNT]
     return true;
 }
 
-static const uint8_t s_default_led_rgb[LED_COLOR_COUNT][3] = {
-    { 0x00, 0xFF, 0xFF }, // LED_SLOT_BLE0: Aqua
-    { 0x4B, 0x00, 0xFF }, // LED_SLOT_BLE1: Indigo
-    { 0xFF, 0xD7, 0x00 }, // LED_SLOT_BLE2: Gold
-    { 0xFF, 0xFF, 0xFF }, // LED_SLOT_IDLE: White
-    { 0x00, 0x99, 0xFF }, // LED_SLOT_USB: Blue
-    { 0xFF, 0x80, 0x00 }, // LED_SLOT_CHARGING: Orange
-    { 0x00, 0xFF, 0x00 }, // LED_SLOT_FULL: Green
-    { 0xFF, 0xFF, 0x00 }, // LED_SLOT_PASSKEY_REQ: Yellow
-    { 0xFF, 0x00, 0x80 }, // LED_SLOT_PASSKEY_SEND: Pink
-    { 0xFF, 0x00, 0xFF }, // LED_SLOT_SLEEP: Magenta
-};
-
 void store_config_get_led_colors(uint8_t out[LED_COLOR_COUNT * 3])
 {
     if (out == NULL)
         return;
     ext_config_t* ext = storage_get_ext_config();
     if (ext->magic != EXT_CONFIG_MAGIC || ext->version != EXT_CONFIG_VERSION) {
-        memcpy(out, s_default_led_rgb, LED_COLOR_COUNT * 3);
+        memcpy(out, default_led_colors, LED_COLOR_COUNT * 3);
         return;
     }
     memcpy(out, ext->led_colors, LED_COLOR_COUNT * 3);
@@ -272,7 +259,7 @@ bool store_config_set_led_colors(const uint8_t data[LED_COLOR_COUNT * 3])
 uint32_t store_config_get_led_color(uint8_t slot)
 {
     uint8_t idx = (slot < LED_COLOR_COUNT) ? slot : LED_SLOT_IDLE;
-    const uint8_t* rgb = s_default_led_rgb[idx];
+    const uint8_t* rgb = default_led_colors[idx];
     ext_config_t* ext = storage_get_ext_config();
     if (ext->magic == EXT_CONFIG_MAGIC && ext->version == EXT_CONFIG_VERSION) {
         rgb = ext->led_colors[idx];

@@ -2,6 +2,7 @@
 
 #define PRODUCT "Lot60.C" /* 硬件名称，用于蓝牙显示 */
 #define DEVICE_VER 0x0000 /* 硬件版本 */
+#define HARDWARE_REV_STR "Rev.C"
 
 #define LED_CAPS 21
 #define LED_RGB_R 22

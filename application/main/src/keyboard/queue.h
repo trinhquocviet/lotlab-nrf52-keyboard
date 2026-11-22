@@ -1,38 +1,42 @@
 #pragma once
 
+#include <stdbool.h>
+
 #define QUEUE(TYPE, NAME, SIZE)                                          \
-    TYPE NAME[SIZE];                                                     \
-    const int NAME##_size = SIZE;                                        \
+    static TYPE NAME[SIZE];                                              \
+    static const int NAME##_size = SIZE;                                 \
     static int NAME##_front = 0, NAME##_rear = 0;                        \
     static bool NAME##_full = false;                                     \
-    void NAME##_pop()                                                    \
+    static inline void NAME##_pop(void)                                  \
     {                                                                    \
         if (NAME##_full || NAME##_front != NAME##_rear) {                \
-            NAME##_rear = ++NAME##_rear < NAME##_size ? NAME##_rear : 0; \
-            if (NAME##_full)                                             \
-                NAME##_full = false;                                     \
+            NAME##_rear = (NAME##_rear + 1) % NAME##_size;               \
+            NAME##_full = false;                                         \
         }                                                                \
     }                                                                    \
-    void NAME##_push(TYPE item)                                          \
+    static inline bool NAME##_push(TYPE item)                            \
     {                                                                    \
+        if (NAME##_full) {                                               \
+            return false;                                                \
+        }                                                                \
         NAME[NAME##_front] = item;                                       \
         NAME##_front = (NAME##_front + 1) % NAME##_size;                 \
-        if (NAME##_full)                                                 \
-            NAME##_rear = NAME##_front;                                  \
-        else if (NAME##_rear == NAME##_front)                            \
+        if (NAME##_front == NAME##_rear) {                               \
             NAME##_full = true;                                          \
+        }                                                                \
+        return true;                                                     \
     }                                                                    \
-    bool NAME##_empty()                                                  \
+    static inline bool NAME##_empty(void)                                \
     {                                                                    \
         return (!NAME##_full && NAME##_front == NAME##_rear);            \
     }                                                                    \
-    TYPE* NAME##_peek()                                                  \
+    static inline TYPE* NAME##_peek(void)                                \
     {                                                                    \
         if (NAME##_empty())                                              \
             return 0;                                                    \
         return &NAME[NAME##_rear];                                       \
     }                                                                    \
-    void NAME##_clear()                                                  \
+    static inline void NAME##_clear(void)                                \
     {                                                                    \
         NAME##_front = 0;                                                \
         NAME##_rear = 0;                                                 \

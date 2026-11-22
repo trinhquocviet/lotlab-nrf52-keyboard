@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "nrf_section.h"
@@ -40,3 +41,4 @@ struct adc_channel_config {
 void adc_timer_start(void);
 void adc_init(void);
 nrf_saadc_value_t adc_read_sync(uint8_t channel_index);
+bool adc_read_channel_once(nrf_saadc_channel_config_t const* p_ch_cfg, nrf_saadc_value_t* p_value);

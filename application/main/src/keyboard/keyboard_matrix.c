@@ -144,16 +144,7 @@ static void unselect_rows(uint8_t row)
 
 static inline void delay_us(void)
 {
-#ifdef __GNUC__
-#define __nop() __asm("NOP")
-#endif
-
-#ifndef MATRIX_SCAN_DELAY_CYCLE
-#define MATRIX_SCAN_DELAY_CYCLE 128
-#endif
-    for (int i = 0; i < MATRIX_SCAN_DELAY_CYCLE; i++) {
-        __nop(); //64mhz, 64cycle = 1us
-    }
+    nrf_delay_us(2);
 }
 
 uint8_t matrix_scan(void)

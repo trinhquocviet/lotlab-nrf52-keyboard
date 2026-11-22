@@ -179,3 +179,47 @@ nrf_saadc_value_t adc_read_sync(uint8_t channel_index)
 
     return result_sync;
 }
+
+/**
+ * @brief Initialize SAADC on channel 0, calibrate offset, perform one synchronous sample, and uninit cleanly.
+ */
+bool adc_read_channel_once(nrf_saadc_channel_config_t const* p_ch_cfg, nrf_saadc_value_t* p_value)
+{
+    if (saadc_inited || p_ch_cfg == NULL || p_value == NULL) {
+        return false;
+    }
+
+    ret_code_t err_code = nrfx_saadc_init(&config, adc_event_callback);
+    APP_ERROR_CHECK(err_code);
+
+    nrf_saadc_event_clear(NRF_SAADC_EVENT_CALIBRATEDONE);
+    nrf_saadc_task_trigger(NRF_SAADC_TASK_CALIBRATEOFFSET);
+    bool cal_done = false;
+    for (uint32_t wait = 0; wait < 100000U; wait++) {
+        if (nrf_saadc_event_check(NRF_SAADC_EVENT_CALIBRATEDONE)) {
+            cal_done = true;
+            break;
+        }
+    }
+    nrf_saadc_event_clear(NRF_SAADC_EVENT_CALIBRATEDONE);
+    if (!cal_done) {
+        // Calibration timed out; stop SAADC cleanly and sample uncalibrated.
+        nrf_saadc_event_clear(NRF_SAADC_EVENT_STOPPED);
+        nrf_saadc_task_trigger(NRF_SAADC_TASK_STOP);
+        for (uint32_t stop_wait = 0; stop_wait < 1000U; stop_wait++) {
+            if (nrf_saadc_event_check(NRF_SAADC_EVENT_STOPPED)) {
+                break;
+            }
+        }
+        nrf_saadc_event_clear(NRF_SAADC_EVENT_STOPPED);
+    }
+
+    err_code = nrfx_saadc_channel_init(0, p_ch_cfg);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = nrfx_saadc_sample_convert(0, p_value);
+    APP_ERROR_CHECK(err_code);
+
+    nrfx_saadc_uninit();
+    return true;
+}

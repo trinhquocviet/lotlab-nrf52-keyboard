@@ -58,15 +58,13 @@ SRC_FILES += \
 	$(SDK_ROOT)/components/libraries/strerror/nrf_strerror.c \
 	$(SDK_ROOT)/components/libraries/bootloader/dfu/nrf_dfu_svci.c \
 	$(SDK_ROOT)/components/libraries/low_power_pwm/low_power_pwm.c \
-	$(SDK_ROOT)/components/libraries/uart/app_uart_fifo.c \
 	$(SDK_ROOT)/components/libraries/fifo/app_fifo.c \
-	$(SDK_ROOT)/integration/nrfx/legacy/nrf_drv_uart.c \
 	$(SDK_ROOT)/modules/nrfx/soc/nrfx_atomic.c \
+	$(SDK_ROOT)/modules/nrfx/hal/nrf_nvmc.c \
 	$(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_clock.c \
 	$(SDK_ROOT)/modules/nrfx/drivers/src/prs/nrfx_prs.c \
 	$(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_saadc.c \
 	$(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_wdt.c \
-	$(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_uart.c \
 	$(APP_SRC_DIR)/main.c \
 	$(APP_SRC_DIR)/ble/ble_services.c \
 	$(APP_SRC_DIR)/ble/ble_hid_service.c \

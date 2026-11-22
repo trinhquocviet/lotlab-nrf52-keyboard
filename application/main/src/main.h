@@ -47,4 +47,9 @@ void sleep(enum SLEEP_REASON reason);
  * @param mode: 睡眠模式
  */
 void notify_sleep(enum sleep_evt_type mode);
+/**
+ * Feed all enabled watchdog reload request channels directly via NRF_WDT registers.
+ */
+void wdt_feed_raw(void);
+#define STORAGE_FORMAT_MAGIC 0x46U
 extern bool erase_bonds;

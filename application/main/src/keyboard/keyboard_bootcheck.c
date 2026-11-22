@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <stdint.h>
 
 #include "../main.h"
+#include "app_scheduler.h"
 #include "config.h"
 #include "bootmagic.h"
 #include "hook.h"
@@ -98,6 +99,7 @@ __attribute__((weak)) void boot_check()
     if (sleep_flag) {
         sleep_flag = !keypress_check();
 #ifdef HAS_USB
+        app_sched_execute();
         // 若连接至主机则自动开机
         if (usb_working())
             sleep_flag &= false;

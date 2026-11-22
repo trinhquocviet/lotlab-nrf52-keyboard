@@ -52,11 +52,18 @@ static uint32_t active_ble_color(void)
     return store_config_get_led_color((uint8_t)(LED_SLOT_BLE0 + current_ble_channel()));
 }
 
+#define LED_COLOR_DEGRADED 0xFF0000UL
+
 /**
  * @brief Update RGB LED color for the active connection / charging state.
  */
 static void led_status_change(void)
 {
+    if (storage_degraded()) {
+        keyboard_led_rgb_set(LED_COLOR_DEGRADED);
+        keyboard_led_rgb_switch(true);
+        return;
+    }
     if (usb_working) {
         keyboard_led_rgb_set(store_config_get_led_color(LED_SLOT_USB));
 #ifdef PIN_CHARGING

@@ -37,6 +37,8 @@ enum hid_command {
     // 设置所有宏的值
     HID_CMD_SET_ALL_MACRO,
 
+    // Wipe FDS flash pages at next boot ("FDS!" magic required)
+    HID_CMD_FORMAT_STORAGE = 0x3C,
     // 放弃当前设置还未写入存储的数据
     HID_CMD_READ_CONFIG = 0x3D,
     // 将数据写入存储
