@@ -20,7 +20,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "fds.h"
 #include "nrf.h"
+#include "app_timer.h"
 #include "app_util_platform.h"
+#include "nrf_delay.h"
 #include "util.h"
 #include "nrf_sdh.h"
 
@@ -445,6 +447,7 @@ static void config_storage_init()
 enum fds_op_type {
     FDS_OP_UPDATE,
     FDS_OP_WRITE,
+    FDS_OP_DELETE,
 };
 
 enum storage_slot {
@@ -474,6 +477,7 @@ struct storage_slot_state {
     bool in_flight;
     bool retry_pending;
     bool has_record;
+    bool deleting;
     enum fds_op_type retry_op;
 };
 
@@ -622,14 +626,54 @@ static void storage_submit_op(enum storage_slot slot, enum fds_op_type op)
     CRITICAL_REGION_ENTER();
     if (s->in_flight) {
         s->retry_pending = true;
-        s->retry_op = s->has_record ? FDS_OP_UPDATE : FDS_OP_WRITE;
+        if (op == FDS_OP_DELETE) {
+            s->retry_op = FDS_OP_DELETE;
+        } else {
+            s->retry_op = (s->has_record && !s->deleting) ? FDS_OP_UPDATE : FDS_OP_WRITE;
+        }
         skip = true;
-    } else {
-        actual_op = s->has_record ? op : FDS_OP_WRITE;
+    } else if (op != FDS_OP_DELETE) {
+        actual_op = (s->has_record && !s->deleting) ? op : FDS_OP_WRITE;
     }
     CRITICAL_REGION_EXIT();
 
     if (skip) {
+        return;
+    }
+
+    if (actual_op == FDS_OP_DELETE) {
+        CRITICAL_REGION_ENTER();
+        if (s->in_flight) {
+            s->retry_pending = true;
+            s->retry_op = FDS_OP_DELETE;
+            skip = true;
+        } else if (!s->has_record) {
+            s->deleting = false;
+            skip = true;
+        } else {
+            s->in_flight = true;
+            s->deleting = true;
+            s->has_record = false;
+        }
+        CRITICAL_REGION_EXIT();
+        if (skip) {
+            return;
+        }
+
+        ret_code_t del_err = fds_record_delete(s->record_desc);
+        if (del_err == FDS_SUCCESS) {
+            return;
+        }
+        CRITICAL_REGION_ENTER();
+        s->in_flight = false;
+        if (del_err == FDS_ERR_NO_SPACE_IN_QUEUES || del_err == FDS_ERR_BUSY) {
+            s->retry_pending = true;
+            s->retry_op = FDS_OP_DELETE;
+        } else {
+            // FDS_ERR_NOT_FOUND / FDS_ERR_NULL_ARG: nothing left to delete in FDS.
+            s->deleting = false;
+        }
+        CRITICAL_REGION_EXIT();
         return;
     }
 
@@ -651,7 +695,7 @@ static void storage_submit_op(enum storage_slot slot, enum fds_op_type op)
     CRITICAL_REGION_ENTER();
     if (s->in_flight) {
         s->retry_pending = true;
-        s->retry_op = s->has_record ? FDS_OP_UPDATE : FDS_OP_WRITE;
+        s->retry_op = (s->has_record && !s->deleting) ? FDS_OP_UPDATE : FDS_OP_WRITE;
         raced = true;
     } else {
         memcpy(s->tx_buf, s->ram_buf, s->size_bytes);
@@ -776,6 +820,29 @@ static void storage_callback(fds_evt_t const* p_evt)
         storage_drain_pending();
         break;
     case FDS_EVT_DEL_RECORD:
+        if (p_evt->del.file_id == FILE_ID) {
+            for (uint8_t i = 0; i < STORAGE_SLOT_COUNT; i++) {
+                if (s_slots[i].record_key == p_evt->del.record_key) {
+                    CRITICAL_REGION_ENTER();
+                    s_slots[i].in_flight = false;
+                    s_slots[i].has_record = false;
+                    if (p_evt->result == FDS_SUCCESS || p_evt->result == FDS_ERR_NOT_FOUND) {
+                        s_slots[i].deleting = false;
+                    } else if (p_evt->result == FDS_ERR_NO_SPACE_IN_QUEUES
+                        || p_evt->result == FDS_ERR_BUSY
+                        || p_evt->result == FDS_ERR_OPERATION_TIMEOUT) {
+                        s_slots[i].retry_pending = true;
+                        s_slots[i].retry_op = FDS_OP_DELETE;
+                    } else {
+                        s_slots[i].deleting = false;
+                    }
+                    CRITICAL_REGION_EXIT();
+                    break;
+                }
+            }
+        }
+        storage_drain_pending();
+        break;
     case FDS_EVT_DEL_FILE:
         storage_drain_pending();
         break;
@@ -803,16 +870,22 @@ static void storage_callback_init(void)
         return;
     }
 
-    uint32_t spins = 0;
-    while (!s_fds_init_done && spins < 500000U) {
-        spins++;
+    uint32_t start_ticks = app_timer_cnt_get();
+    uint32_t delay_steps = 0;
+    while (!s_fds_init_done) {
 #ifdef SOFTDEVICE_PRESENT
         if (nrf_sdh_is_enabled()) {
-            sd_app_evt_wait();
+            if (app_timer_cnt_diff_compute(app_timer_cnt_get(), start_ticks) >= APP_TIMER_TICKS(1000)) {
+                break;
+            }
+            (void)sd_app_evt_wait();
         } else
 #endif
         {
-            __WFE();
+            if (++delay_steps > 10000U) {
+                break;
+            }
+            nrf_delay_us(100);
         }
     }
 
@@ -836,6 +909,11 @@ static void storage_read_inner(enum storage_slot slot)
         return;
     }
     struct storage_slot_state* s = &s_slots[slot];
+    if (s->deleting) {
+        // Avoid find-after-delete race while FDS_EVT_DEL_RECORD is pending.
+        storage_load_slot_defaults(slot);
+        return;
+    }
     fds_find_token_t ftok = { 0 };
     fds_flash_record_t flash_record = { 0 };
     bool record_open = false;
@@ -935,6 +1013,15 @@ void storage_read(uint8_t mask)
  * 
  * @param mask 
  */
+static void storage_delete_slot(enum storage_slot slot)
+{
+    if (slot >= STORAGE_SLOT_COUNT) {
+        return;
+    }
+    storage_load_slot_defaults(slot);
+    storage_submit_op(slot, FDS_OP_DELETE);
+}
+
 void storage_delete(uint8_t mask)
 {
     if (s_storage_degraded) {
@@ -944,42 +1031,23 @@ void storage_delete(uint8_t mask)
 
 #ifdef KEYMAP_STORAGE
     if (mask & 0x01) {
-        CRITICAL_REGION_ENTER();
-        s_slots[SLOT_KEYMAP].retry_pending = false;
-        s_slots[SLOT_KEYMAP].has_record = false;
-        CRITICAL_REGION_EXIT();
-        (void)fds_record_delete(&keymap_record_desc);
+        storage_delete_slot(SLOT_KEYMAP);
     }
 #endif
 #if defined(KEYMAP_STORAGE) && !defined(ACTIONMAP_ENABLE)
     if (mask & 0x02) {
-        CRITICAL_REGION_ENTER();
-        s_slots[SLOT_FN].retry_pending = false;
-        s_slots[SLOT_FN].has_record = false;
-        CRITICAL_REGION_EXIT();
-        (void)fds_record_delete(&fn_record_desc);
+        storage_delete_slot(SLOT_FN);
     }
 #endif
 #ifdef MACRO_STORAGE
     if (mask & 0x04) {
-        CRITICAL_REGION_ENTER();
-        s_slots[SLOT_MACRO].retry_pending = false;
-        s_slots[SLOT_MACRO].has_record = false;
-        CRITICAL_REGION_EXIT();
-        (void)fds_record_delete(&macro_record_desc);
+        storage_delete_slot(SLOT_MACRO);
     }
 #endif
 #ifdef CONFIG_STORAGE
     if (mask & 0x08) {
-        CRITICAL_REGION_ENTER();
-        s_slots[SLOT_CONFIG].retry_pending = false;
-        s_slots[SLOT_CONFIG].has_record = false;
-        s_slots[SLOT_EXT_CONFIG].retry_pending = false;
-        s_slots[SLOT_EXT_CONFIG].has_record = false;
-        CRITICAL_REGION_EXIT();
-        (void)fds_record_delete(&config_record_desc);
-        (void)fds_record_delete(&ext_config_record_desc);
-        ext_config_reset_defaults();
+        storage_delete_slot(SLOT_CONFIG);
+        storage_delete_slot(SLOT_EXT_CONFIG);
     }
 #endif
 }

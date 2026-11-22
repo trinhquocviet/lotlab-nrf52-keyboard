@@ -565,6 +565,11 @@ void usb_send(uint8_t index, uint8_t len, uint8_t* pattern)
     if (len > 61)
         return;
 
+    // Reserve 64 B of uart_queue headroom for PACKET_CONF replies under heavy typing.
+    if (uart_queue_free_space() < (uint16_t)(len + 4U + 64U)) {
+        return;
+    }
+
     uint8_t data[64];
     data[0] = 0x40 + len;
     data[1] = index;
@@ -572,7 +577,7 @@ void usb_send(uint8_t index, uint8_t len, uint8_t* pattern)
     memcpy(&data[2], pattern, len);
     data[len + 2] = checksum(data, len + 2);
 
-    uart_queue_enqueue(len + 3, data);
+    (void)uart_queue_enqueue(len + 3, data);
 }
 
 /**
@@ -587,7 +592,7 @@ void uart_send_conf(uint8_t len, uint8_t* data)
     buff[0] = 0x80 + len;
     memcpy(&buff[1], data, len);
     buff[len + 1] = checksum(buff, len + 1);
-    uart_queue_enqueue(len + 2, buff);
+    (void)uart_queue_enqueue(len + 2, buff);
 }
 
 APP_TIMER_DEF(uart_check_timer);

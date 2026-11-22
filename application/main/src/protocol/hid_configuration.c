@@ -111,9 +111,9 @@ void hid_response_success(uint8_t len, uint8_t* data)
     if (last_driver == NULL || !last_driver->driver_working())
         return;
 
-    uint8_t buff[63];
-    if (len > sizeof(buff) - 2) {
-        len = sizeof(buff) - 2;
+    uint8_t buff[62];
+    if (len > sizeof(buff) - 2U) {
+        len = sizeof(buff) - 2U;
     }
     buff[0] = 0x00;
     buff[1] = len;
@@ -169,6 +169,27 @@ static void send_information_sub_1()
 
     info[6] = current_packet_size;
     info[7] = storage_degraded() ? 0x01U : 0x00U;
+    hid_response_success(sizeof(info), info);
+}
+
+#define FW_CAP_LED_COLORS      (1UL << 0) /* Config ID 0x15 */
+#define FW_CAP_BATTERY_STATUS  (1UL << 1) /* Config ID 0x16 */
+#define FW_CAP_MACOS_KEYS      (1UL << 2) /* 0xE8..0xEB F3-F6 */
+#define FW_CAP_FORMAT_DEGRADED (1UL << 3) /* Cmd 0x3C + info[7] degraded bit */
+#define FW_CAP_FDS_RETRY_QUEUE (1UL << 4) /* FDS_OP_QUEUE_SIZE=8 + retry queue */
+
+static void send_information_sub_2(void)
+{
+    uint32_t caps = FW_CAP_BATTERY_STATUS | FW_CAP_MACOS_KEYS | FW_CAP_FORMAT_DEGRADED | FW_CAP_FDS_RETRY_QUEUE;
+#ifdef CONFIG_STORAGE
+    caps |= FW_CAP_LED_COLORS;
+#endif
+    uint8_t info[4] = {
+        (uint8_t)(caps & 0xFFU),
+        (uint8_t)((caps >> 8) & 0xFFU),
+        (uint8_t)((caps >> 16) & 0xFFU),
+        (uint8_t)((caps >> 24) & 0xFFU),
+    };
     hid_response_success(sizeof(info), info);
 }
 
@@ -501,7 +522,11 @@ static void read_data(uint8_t type)
 static void reset_data(uint8_t type)
 {
     storage_delete(type);
-    read_data(type);
+    if (type & 0x08) {
+        ble_device_name_refresh();
+        keyboard_profile_apply_active();
+    }
+    hid_response_generic(HID_RESP_SUCCESS);
 }
 
 /**
@@ -528,6 +553,9 @@ void hid_on_recv(const struct host_driver* driver, uint8_t command, uint8_t len,
             break;
         case 1:
             send_information_sub_1();
+            break;
+        case 2:
+            send_information_sub_2();
             break;
         default:
             hid_response_generic(HID_RESP_PARAMETER_ERROR);
@@ -598,7 +626,11 @@ void hid_on_recv(const struct host_driver* driver, uint8_t command, uint8_t len,
         }
         break;
     case HID_CMD_SET_SINGLE_CONFIG:
-        set_single_config(data[0], len - 1, &data[1]);
+        if (len < 1) {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        } else {
+            set_single_config(data[0], len - 1, &data[1]);
+        }
         break;
     case HID_CMD_SET_ALL_MACRO:
         if (len < 1 || (uint8_t)(len - 1) > MAX_HID_PACKET_SIZE) {
@@ -619,9 +651,12 @@ void hid_on_recv(const struct host_driver* driver, uint8_t command, uint8_t len,
             if (!s_format_timer_created) {
                 hid_response_generic(HID_RESP_INTERNAL_ERROR);
             } else {
-                hid_response_generic(HID_RESP_SUCCESS);
                 (void)app_timer_stop(m_format_reset_timer);
-                (void)app_timer_start(m_format_reset_timer, APP_TIMER_TICKS(200), NULL);
+                if (app_timer_start(m_format_reset_timer, APP_TIMER_TICKS(200), NULL) == NRF_SUCCESS) {
+                    hid_response_generic(HID_RESP_SUCCESS);
+                } else {
+                    hid_response_generic(HID_RESP_INTERNAL_ERROR);
+                }
             }
         }
         break;
