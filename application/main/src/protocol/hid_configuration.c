@@ -253,6 +253,12 @@ static void get_single_config(uint8_t id)
         hid_response_success(sizeof(buf), buf);
         return;
     }
+    if (id == 0x15) {
+        uint8_t buf[LED_COLOR_COUNT * 3] = { 0 };
+        store_config_get_led_colors(buf);
+        hid_response_success(sizeof(buf), buf);
+        return;
+    }
     struct hid_config_section* item = hid_config_get(id);
     if (item == 0) {
         hid_response_generic(HID_RESP_PARAMETER_ERROR);
@@ -386,6 +392,16 @@ static void set_single_config(uint8_t id, uint8_t len, uint8_t* data)
         if (len != CHANNEL_PROFILE_COUNT) {
             hid_response_generic(HID_RESP_WRITE_OVERFLOW);
         } else if (store_config_set_channel_profiles(data)) {
+            hid_response_generic(HID_RESP_SUCCESS);
+        } else {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        }
+        return;
+    }
+    if (id == 0x15) {
+        if (len != LED_COLOR_COUNT * 3) {
+            hid_response_generic(HID_RESP_WRITE_OVERFLOW);
+        } else if (store_config_set_led_colors(data)) {
             hid_response_generic(HID_RESP_SUCCESS);
         } else {
             hid_response_generic(HID_RESP_PARAMETER_ERROR);

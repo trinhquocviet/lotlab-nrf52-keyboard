@@ -24,19 +24,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "app_timer.h"
 #include "ble_keyboard.h"
 #include "ble_services.h"
+#include "data_storage.h"
 #include "keyboard_evt.h"
 #include "keyboard_led.h"
 #include "nrf_delay.h"
 #include "simple_rgb/led_rgb.h"
-
-#define COLOR_IDLE 0xFFFFFF // 白色: 空闲状态
-#define COLOR_BLE 0x66FFFF // 青色: 蓝牙连接
-#define COLOR_CHARGING 0xFF8000 // 橙色: 充电中
-#define COLOR_FULL 0x00FF00 // 绿色: 充电完毕
-#define COLOR_USB 0x0099ff // 蓝色: USB 已连接
-#define COLOR_PASSKEY_REQ 0xFFFF00 // 黄色: 请求输入配对码
-#define COLOR_PASSKEY_SEND 0xFF0080 // 粉红色: 配对码输入完毕
-#define COLOR_SLEEP 0xFF00FF // 紫红色: 睡眠
+#include "store_config.h"
 
 #define BLE_LED_BLINK_ON_MS 400U
 #define BLE_LED_BLINK_OFF_MS 400U
@@ -68,22 +61,6 @@ static uint8_t s_blink_channel = 0xFF;
  * @brief 按状态更改 LED 样式
  * 
  */
-static void led_status_change()
-{
-    if (usb_working) {
-        keyboard_led_rgb_set(COLOR_USB);
-        keyboard_led_rgb_switch(true);
-#ifdef PIN_CHARGING
-    } else if (is_charging) {
-        keyboard_led_rgb_set(charging_full ? COLOR_FULL : COLOR_CHARGING);
-        keyboard_led_rgb_switch(true);
-#endif
-    } else {
-        keyboard_led_rgb_set(ble_connected ? COLOR_BLE : COLOR_IDLE);
-        keyboard_led_rgb_switch(true);
-    }
-}
-
 static uint8_t current_ble_channel(void)
 {
 #ifdef MULTI_DEVICE_SWITCH
@@ -92,6 +69,27 @@ static uint8_t current_ble_channel(void)
 #else
     return 0U;
 #endif
+}
+
+static uint32_t active_ble_color(void)
+{
+    return store_config_get_led_color((uint8_t)(LED_SLOT_BLE0 + current_ble_channel()));
+}
+
+static void led_status_change()
+{
+    if (usb_working) {
+        keyboard_led_rgb_set(store_config_get_led_color(LED_SLOT_USB));
+        keyboard_led_rgb_switch(true);
+#ifdef PIN_CHARGING
+    } else if (is_charging) {
+        keyboard_led_rgb_set(store_config_get_led_color(charging_full ? LED_SLOT_FULL : LED_SLOT_CHARGING));
+        keyboard_led_rgb_switch(true);
+#endif
+    } else {
+        keyboard_led_rgb_set(ble_connected ? active_ble_color() : store_config_get_led_color(LED_SLOT_IDLE));
+        keyboard_led_rgb_switch(true);
+    }
 }
 
 static void ble_channel_led_stop(void)
@@ -116,7 +114,7 @@ static void ble_channel_led_start(void)
     s_blink_channel = ch;
     s_blinks_left = (uint8_t)(ch + 1U);
     s_ble_led_phase = BLE_LED_BLINK_ON;
-    keyboard_led_rgb_set_raw(COLOR_BLE);
+    keyboard_led_rgb_set_raw(active_ble_color());
     (void)app_timer_start(m_ble_channel_led_timer, APP_TIMER_TICKS(BLE_LED_BLINK_ON_MS), NULL);
 }
 
@@ -151,7 +149,7 @@ static void ble_channel_led_step(void* p_data, uint16_t len)
     case BLE_LED_BLINK_OFF:
         if (s_blinks_left > 0) {
             s_ble_led_phase = BLE_LED_BLINK_ON;
-            keyboard_led_rgb_set_raw(COLOR_BLE);
+            keyboard_led_rgb_set_raw(active_ble_color());
             (void)app_timer_start(m_ble_channel_led_timer, APP_TIMER_TICKS(BLE_LED_BLINK_ON_MS), NULL);
         } else if (ble_connected) {
             s_ble_led_phase = BLE_LED_IDLE;
@@ -338,11 +336,11 @@ void rgb_led_event_handler(enum user_event event, void* arg)
         ble_channel_led_stop();
         switch (arg2) {
         case PASSKEY_STATE_REQUIRE:
-            keyboard_led_rgb_set(COLOR_PASSKEY_REQ);
+            keyboard_led_rgb_set(store_config_get_led_color(LED_SLOT_PASSKEY_REQ));
             keyboard_led_rgb_switch(true);
             break;
         case PASSKEY_STATE_SEND:
-            keyboard_led_rgb_set(COLOR_PASSKEY_SEND);
+            keyboard_led_rgb_set(store_config_get_led_color(LED_SLOT_PASSKEY_SEND));
             keyboard_led_rgb_switch(true);
             break;
         default:
@@ -351,7 +349,16 @@ void rgb_led_event_handler(enum user_event event, void* arg)
         break;
     case USER_EVT_SLEEP: // 睡眠指示
         ble_channel_led_stop();
-        keyboard_led_rgb_direct(COLOR_SLEEP);
+        keyboard_led_rgb_direct(store_config_get_led_color(LED_SLOT_SLEEP));
+        break;
+    case USER_EVT_LED:
+        if (leds_inited) {
+            if (s_ble_led_phase == BLE_LED_IDLE) {
+                led_status_change();
+            } else if (s_ble_led_phase == BLE_LED_BLINK_ON) {
+                keyboard_led_rgb_set_raw(active_ble_color());
+            }
+        }
         break;
     default:
         break;

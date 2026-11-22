@@ -230,12 +230,26 @@ CONFIG_SECTION_DEF();
 #define EXT_CONFIG_RECORD_KEY 0x0498
 REGISTER_FDS_BLOCK(ext_config, EXT_CONFIG_SIZE_WORD, EXT_CONFIG_RECORD_KEY)
 
+static const uint8_t DEFAULT_LED_COLORS[LED_COLOR_COUNT][3] = {
+    { 0x00, 0xFF, 0xFF }, // LED_SLOT_BLE0: Aqua
+    { 0x4B, 0x00, 0xFF }, // LED_SLOT_BLE1: Indigo
+    { 0xFF, 0xD7, 0x00 }, // LED_SLOT_BLE2: Gold
+    { 0xFF, 0xFF, 0xFF }, // LED_SLOT_IDLE: White
+    { 0x00, 0x99, 0xFF }, // LED_SLOT_USB: Blue
+    { 0xFF, 0x80, 0x00 }, // LED_SLOT_CHARGING: Orange
+    { 0x00, 0xFF, 0x00 }, // LED_SLOT_FULL: Green
+    { 0xFF, 0xFF, 0x00 }, // LED_SLOT_PASSKEY_REQ: Yellow
+    { 0xFF, 0x00, 0x80 }, // LED_SLOT_PASSKEY_SEND: Pink
+    { 0xFF, 0x00, 0xFF }, // LED_SLOT_SLEEP: Magenta
+};
+
 static void ext_config_reset_defaults(void)
 {
     memset(ext_config_block, 0, sizeof(ext_config_t));
     ext_config_t* cfg = (ext_config_t*)ext_config_block;
     cfg->magic = EXT_CONFIG_MAGIC;
     cfg->version = EXT_CONFIG_VERSION;
+    memcpy(cfg->led_colors, DEFAULT_LED_COLORS, sizeof(cfg->led_colors));
 }
 
 ext_config_t* storage_get_ext_config(void)
@@ -411,6 +425,21 @@ static void storage_read_inner(fds_record_t const* record, fds_record_desc_t* re
             // 大小正常，读取数据
             memcpy((uint8_t*)record->data.p_data, flash_record.p_data, record->data.length_words * 4);
             fds_record_close(record_desc);
+#ifdef CONFIG_STORAGE
+        } else if (record == &ext_config_record && flash_record.p_header->length_words == EXT_CONFIG_V1_WORDS) {
+            // Migrate v1 ext_config (24 bytes) to v2 (56 bytes) while preserving custom_name and channel_profile.
+            memset(ext_config_block, 0, sizeof(ext_config_t));
+            memcpy(ext_config_block, flash_record.p_data, EXT_CONFIG_V1_WORDS * 4);
+            fds_record_close(record_desc);
+            ext_config_t* ext = (ext_config_t*)ext_config_block;
+            if (ext->magic == EXT_CONFIG_MAGIC && ext->version == 1 && ext->name_len <= MAX_CUSTOM_NAME_BYTES) {
+                ext->version = EXT_CONFIG_VERSION;
+                memcpy(ext->led_colors, DEFAULT_LED_COLORS, sizeof(ext->led_colors));
+            } else {
+                ext_config_reset_defaults();
+            }
+            storage_update_inner(record, record_desc);
+#endif
         } else {
             // 大小不正常，尝试更新数据
             fds_record_close(record_desc);
