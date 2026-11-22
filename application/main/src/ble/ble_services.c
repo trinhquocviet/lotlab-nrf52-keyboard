@@ -39,9 +39,18 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "ble_config.h"
 #include "data_storage.h"
+#include "nordic_common.h"
 #include "store_config.h"
 #include "util.h"
 #include <string.h>
+
+#ifndef HARDWARE_REV_STR
+#define HARDWARE_REV_STR "Rev.1"
+#endif
+
+#ifndef VERSION
+#define VERSION 00000000
+#endif
 
 #define PNP_ID_VENDOR_ID_SOURCE 0x02 /**< Vendor ID Source. */
 
@@ -88,6 +97,10 @@ NRF_BLE_QWR_DEF(m_qwr); /**< Context for the Queued Write module.*/
 BLE_ADVERTISING_DEF(m_advertising); /**< Advertising module instance. */
 
 static ble_uuid_t m_adv_uuids[] = { { BLE_UUID_HUMAN_INTERFACE_DEVICE_SERVICE, BLE_UUID_TYPE_BLE } };
+static ble_uuid_t m_sr_uuids[] = {
+    { BLE_UUID_BATTERY_SERVICE, BLE_UUID_TYPE_BLE },
+    { BLE_UUID_DEVICE_INFORMATION_SERVICE, BLE_UUID_TYPE_BLE },
+};
 
 static void advertising_config_get(ble_adv_modes_config_t* p_config);
 
@@ -311,15 +324,28 @@ static void set_default_device_name(void)
 
     char device_name[24];
     memset(device_name, 0, sizeof(device_name));
+    size_t suffix_len = 0;
+#ifdef MACADDR_SEPRATOR
+    suffix_len += 7; // '_' + 6 hex MAC chars
+#endif
+#ifdef MULTI_DEVICE_SWITCH
+    suffix_len += 2; // '_' + channel digit
+#endif
+    size_t max_base = (18 > suffix_len) ? (18 - suffix_len) : 0;
+
 #ifdef MACADDR_SEPRATOR
     size_t orig_len = strlen(DEVICE_NAME);
-    if (orig_len <= 12) {
+    if (orig_len <= max_base) {
         get_device_name(device_name, (int)orig_len);
-    } else {
-        strncpy(device_name, DEVICE_NAME, 12);
+    } else if (max_base > 0) {
+        strncpy(device_name, DEVICE_NAME, max_base);
+        device_name[max_base] = '\0';
     }
 #else
-    strncpy(device_name, DEVICE_NAME, 16);
+    if (max_base > 0) {
+        strncpy(device_name, DEVICE_NAME, max_base);
+        device_name[max_base] = '\0';
+    }
 #endif
 #ifdef MULTI_DEVICE_SWITCH
     uint8_t dev_id = switch_device_get_id();
@@ -618,6 +644,7 @@ void advertising_restart(ble_adv_mode_t mode, bool whitelist)
         adv_stop_if_active();
         advertising_update_data();
         if (!whitelist) {
+            m_advertising.adv_mode_current = mode;
             (void)ble_advertising_restart_without_whitelist(&m_advertising);
         } else {
             (void)ble_advertising_start(&m_advertising, mode);
@@ -744,6 +771,11 @@ static void pm_evt_handler(pm_evt_t const* p_evt)
         break;
     }
 
+    case PM_EVT_LOCAL_DB_CACHE_APPLY_FAILED:
+        // Notify bonded hosts (e.g. macOS) when GATT attribute handles shifted after FW upgrade.
+        pm_local_database_has_changed();
+        break;
+
     default:
         break;
     }
@@ -824,6 +856,7 @@ static void dis_init(void)
     ret_code_t err_code;
     ble_dis_init_t dis_init_obj;
     ble_dis_pnp_id_t pnp_id;
+    static char serial_str[13];
 
     pnp_id.vendor_id_source = PNP_ID_VENDOR_ID_SOURCE;
     pnp_id.vendor_id = VENDOR_ID;
@@ -833,9 +866,25 @@ static void dis_init(void)
     memset(&dis_init_obj, 0, sizeof(dis_init_obj));
 
     ble_srv_ascii_to_utf8(&dis_init_obj.manufact_name_str, MANUFACTURER_NAME);
+    ble_srv_ascii_to_utf8(&dis_init_obj.model_num_str, PRODUCT);
+    ble_srv_ascii_to_utf8(&dis_init_obj.hw_rev_str, HARDWARE_REV_STR);
+    ble_srv_ascii_to_utf8(&dis_init_obj.fw_rev_str, STRINGIFY(VERSION));
+
+    ble_gap_addr_t gap_addr;
+    if (sd_ble_gap_addr_get(&gap_addr) == NRF_SUCCESS) {
+        static const char hex_chars[] = "0123456789ABCDEF";
+        for (uint8_t i = 0; i < BLE_GAP_ADDR_LEN; i++) {
+            uint8_t byte = gap_addr.addr[BLE_GAP_ADDR_LEN - 1 - i];
+            serial_str[i * 2] = hex_chars[(byte >> 4) & 0x0F];
+            serial_str[i * 2 + 1] = hex_chars[byte & 0x0F];
+        }
+        serial_str[12] = '\0';
+        ble_srv_ascii_to_utf8(&dis_init_obj.serial_num_str, serial_str);
+    }
+
     dis_init_obj.p_pnp_id = &pnp_id;
 
-    dis_init_obj.dis_char_rd_sec = SEC_JUST_WORKS;
+    dis_init_obj.dis_char_rd_sec = SEC_CURRENT;
 
     err_code = ble_dis_init(&dis_init_obj);
     APP_ERROR_CHECK(err_code);
@@ -1224,6 +1273,9 @@ static void advertising_init(void)
     init.advdata.uuids_complete.uuid_cnt = sizeof(m_adv_uuids) / sizeof(m_adv_uuids[0]);
     init.advdata.uuids_complete.p_uuids = m_adv_uuids;
 
+    init.srdata.uuids_complete.uuid_cnt = sizeof(m_sr_uuids) / sizeof(m_sr_uuids[0]);
+    init.srdata.uuids_complete.p_uuids = m_sr_uuids;
+
     advertising_config_get(&init.config);
 
     init.evt_handler = on_adv_evt;
@@ -1252,6 +1304,9 @@ void ble_passkey_send(uint8_t const* p_key)
 void ble_services_init()
 {
     peer_manager_init();
+#ifdef MULTI_DEVICE_SWITCH
+    switch_device_init();
+#endif
     gap_params_init();
     gatt_init();
     advertising_init();

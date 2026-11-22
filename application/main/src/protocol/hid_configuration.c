@@ -9,6 +9,7 @@
 
 #include "action.h"
 #include "data_storage.h"
+#include "keyboard_battery.h"
 #include "keymap.h"
 #include "store_config.h"
 #include "../ble/ble_services.h"
@@ -240,6 +241,15 @@ static void get_all_fns(uint8_t offset)
  */
 static void get_single_config(uint8_t id)
 {
+    if (id == 0x16) {
+        uint8_t buf[3] = {
+            battery_info.percentage,
+            (uint8_t)(battery_info.voltage & 0xFF),
+            (uint8_t)((battery_info.voltage >> 8) & 0xFF),
+        };
+        hid_response_success(sizeof(buf), buf);
+        return;
+    }
 #ifdef CONFIG_STORAGE
     if (id == 0x13) {
         uint8_t buf[1 + MAX_CUSTOM_NAME_BYTES] = { 0 };
@@ -378,6 +388,10 @@ static void set_all_fns(uint8_t id, uint8_t len, uint8_t* data)
  */
 static void set_single_config(uint8_t id, uint8_t len, uint8_t* data)
 {
+    if (id == 0x16) {
+        hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        return;
+    }
 #ifdef CONFIG_STORAGE
     if (id == 0x13) {
         bool overflow = false;

@@ -93,6 +93,7 @@
 #include "keyboard/adc_convert.h"
 #include "keyboard/ble_keyboard.h"
 #include "keyboard/data_storage.h"
+#include "keyboard/keyboard_battery.h"
 #include "keyboard/keyboard_bootcheck.h"
 #include "keyboard/sleep_reason.h"
 #include "keyboard/keyboard_command.h"
@@ -330,9 +331,10 @@ int main(void)
 #endif
     scheduler_init();
     ble_services_init();
+    adc_init();
+    keyboard_battery_init_sample();
     battery_service_init();
     hid_service_init(service_error_handler);
-    adc_init();
     ble_keyboard_init();
 
 #if !defined(BOOTMAGIC_ENABLE) && defined(BOOTCHECK_ENABLE)
