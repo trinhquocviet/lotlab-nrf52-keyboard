@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "keyboard_evt.h"
 #include "../ble/ble_hid_service.h"
 #include "../ble/ble_services.h"
+#include "app_util_platform.h"
 #include "ble_keyboard.h"
 #include "host.h"
 #include "passkey.h"
@@ -57,10 +58,21 @@ QUEUE(struct event_data, events, MAX_KBD_EVT_COUNT)
  */
 void execute_event()
 {
-    while (!events_empty()) {
+    for (;;) {
+        struct event_data item;
+        bool has_item = false;
+        CRITICAL_REGION_ENTER();
         struct event_data* pt = events_peek();
-        events_pop();
-        external_event_handler(pt->event, pt->arg);
+        if (pt != NULL) {
+            item = *pt;
+            events_pop();
+            has_item = true;
+        }
+        CRITICAL_REGION_EXIT();
+        if (!has_item) {
+            break;
+        }
+        external_event_handler(item.event, item.arg);
     }
 }
 
@@ -83,7 +95,9 @@ void trig_event(enum user_event event, void* arg)
             .arg = arg,
             .event = event,
         };
-        events_push(item);
+        CRITICAL_REGION_ENTER();
+        (void)events_push(item);
+        CRITICAL_REGION_EXIT();
     }
 }
 

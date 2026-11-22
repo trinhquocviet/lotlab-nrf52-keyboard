@@ -72,6 +72,7 @@ void storage_read(uint8_t mask);
 void storage_init(void);
 bool storage_write(uint8_t mask);
 void storage_delete(uint8_t mask);
+bool storage_degraded(void);
 uint16_t storage_read_data(enum storage_type type, uint16_t offset, uint16_t len, uint8_t* data);
 uint16_t storage_write_data(enum storage_type type, uint16_t offset, uint16_t len, uint8_t* data);
 
@@ -87,6 +88,7 @@ void keyboard_set_active_profile(uint8_t base_layer, uint8_t swap_flags);
 
 #ifdef CONFIG_STORAGE
 extern uint8_t config_block[];
+extern const uint8_t default_led_colors[LED_COLOR_COUNT][3];
 
 /**
  * @brief 配置记录区域

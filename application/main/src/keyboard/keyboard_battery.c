@@ -30,6 +30,7 @@ struct BatteryInfo battery_info;
 
 uint16_t adc_buffer[ADC_BUFFER_SIZE];
 uint8_t adc_buffer_index;
+static uint32_t adc_buffer_sum = 0;
 static bool batt_initialized = false;
 static uint8_t last_reported_percentage = 0;
 static uint16_t last_reported_voltage = 0;
@@ -48,11 +49,7 @@ static void calculate_battery_persentage(struct BatteryInfo* info)
 
 static void update_battery_metrics(void)
 {
-    uint32_t result = 0;
-    for (uint8_t i = 0; i < ADC_BUFFER_SIZE; i++) {
-        result += adc_buffer[i];
-    }
-    result /= ADC_BUFFER_SIZE;
+    uint32_t result = adc_buffer_sum / ADC_BUFFER_SIZE;
     // RESULT = [V(P) - V(N)] * GAIN/REFERENCE * 2 ^ (RESOLUTION - m)
     // value  = V_in / 1.2 * 1024
     // V_in   = V_bat * 2.2 / 12.2
@@ -66,6 +63,7 @@ static void battery_process_sample(uint16_t sample)
         for (uint8_t i = 0; i < ADC_BUFFER_SIZE; i++) {
             adc_buffer[i] = sample;
         }
+        adc_buffer_sum = (uint32_t)sample * ADC_BUFFER_SIZE;
         adc_buffer_index = 0;
         batt_initialized = true;
         update_battery_metrics();
@@ -75,7 +73,9 @@ static void battery_process_sample(uint16_t sample)
         return;
     }
 
+    adc_buffer_sum -= adc_buffer[adc_buffer_index];
     adc_buffer[adc_buffer_index] = sample;
+    adc_buffer_sum += sample;
     adc_buffer_index = (adc_buffer_index + 1) % ADC_BUFFER_SIZE;
     update_battery_metrics();
 
@@ -131,6 +131,7 @@ void keyboard_battery_init_sample(void)
     for (uint8_t i = 0; i < ADC_BUFFER_SIZE; i++) {
         adc_buffer[i] = sample;
     }
+    adc_buffer_sum = (uint32_t)sample * ADC_BUFFER_SIZE;
     adc_buffer_index = 0;
     batt_initialized = true;
     update_battery_metrics();

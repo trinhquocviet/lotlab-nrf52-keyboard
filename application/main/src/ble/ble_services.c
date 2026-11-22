@@ -37,6 +37,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "nrf_sdh_soc.h"
 #include "peer_manager_handler.h"
 
+#include "ble_bas_service.h"
 #include "ble_config.h"
 #include "data_storage.h"
 #include "nordic_common.h"
@@ -105,6 +106,8 @@ static ble_uuid_t m_sr_uuids[] = {
 static void advertising_config_get(ble_adv_modes_config_t* p_config);
 
 #ifdef MULTI_DEVICE_SWITCH
+static bool s_switch_device_needs_persist = false;
+
 static uint8_t peer_id_filter(pm_peer_id_t* peer_ids, uint8_t peer_id_count)
 {
     uint8_t real_count = 0;
@@ -129,7 +132,8 @@ static void switch_device_reset()
     switch_storage->magic = SWITCH_ID_MAGIC;
     for (int8_t i = 0; i < MAX_HOST_COUNT; i++)
         switch_storage->peers_id[i] = PM_PEER_ID_INVALID;
-    
+
+    s_switch_device_needs_persist = false;
     switch_device_id_update();
 }
 
@@ -399,6 +403,9 @@ static void set_device_name(void)
  */
 void delete_bonds(void)
 {
+    if (storage_degraded()) {
+        return;
+    }
     ble_disconnect(NULL);
 
     ret_code_t err_code = pm_peers_delete();
@@ -504,6 +511,9 @@ static void advertising_update_data(void)
 
 void ble_device_name_refresh(void)
 {
+    if (storage_degraded()) {
+        return;
+    }
     set_device_name();
     if (!m_advertising_initialized) {
         return;
@@ -544,7 +554,7 @@ static void switch_device_select_after(void* p_data, uint16_t len)
  */
 void switch_device_select(uint8_t id)
 {
-    if (id >= MAX_HOST_COUNT)
+    if (storage_degraded() || id >= MAX_HOST_COUNT)
         return;
 
     if (id == switch_storage->id) {
@@ -579,20 +589,34 @@ static void switch_device_rebond_after(void* p_data, uint16_t size)
  */
 void switch_device_rebond()
 {
+    if (storage_degraded()) {
+        return;
+    }
     ble_disconnect(switch_device_rebond_after);
 }
 /**
- * @brief 切换连接设备初始化.
- *
- * 读取存储的当前连接设备ID，并激活为当前连接设备
+ * @brief Validate and apply active channel state in RAM (deferred flash persist for post-boot_check).
  */
-static void switch_device_init()
+static void switch_device_load(void)
 {
     if (switch_storage->magic != SWITCH_ID_MAGIC || switch_storage->id >= MAX_HOST_COUNT) {
-        switch_device_reset();
+        switch_storage->id = 0;
+        switch_storage->magic = SWITCH_ID_MAGIC;
+        for (int8_t i = 0; i < MAX_HOST_COUNT; i++) {
+            switch_storage->peers_id[i] = PM_PEER_ID_INVALID;
+        }
+        s_switch_device_needs_persist = true;
     }
     m_peer_id = switch_storage->peers_id[switch_storage->id];
     set_gap_addr_by_id(switch_storage->id);
+}
+
+static void switch_device_persist_if_needed(void)
+{
+    if (s_switch_device_needs_persist) {
+        s_switch_device_needs_persist = false;
+        switch_device_id_update();
+    }
 }
 
 /**
@@ -614,12 +638,16 @@ static void switch_device_update(pm_peer_id_t peer_id)
  */
 void advertising_start(bool erase_bonds)
 {
+    if (storage_degraded()) {
+        return;
+    }
     if (erase_bonds) {
         delete_bonds();
         // Advertising is started by PM_EVT_PEERS_DELETE_SUCCEEDED event.
     } else {
 #ifdef MULTI_DEVICE_SWITCH
-        switch_device_init();
+        switch_device_load();
+        switch_device_persist_if_needed();
 #endif
         set_device_name();
         advertising_update_data();
@@ -640,6 +668,9 @@ void advertising_start(bool erase_bonds)
  */
 void advertising_restart(ble_adv_mode_t mode, bool whitelist)
 {
+    if (storage_degraded()) {
+        return;
+    }
     if (m_conn_handle == BLE_CONN_HANDLE_INVALID) {
         adv_stop_if_active();
         advertising_update_data();
@@ -660,6 +691,9 @@ void advertising_restart(ble_adv_mode_t mode, bool whitelist)
  */
 void advertising_slow()
 {
+    if (storage_degraded()) {
+        return;
+    }
     ret_code_t ret = ble_advertising_start(&m_advertising, BLE_ADV_MODE_SLOW);
     if (ret != NRF_SUCCESS && ret != NRF_ERROR_INVALID_STATE) {
         APP_ERROR_CHECK(ret);
@@ -770,6 +804,11 @@ static void pm_evt_handler(pm_evt_t const* p_evt)
         pm_conn_sec_config_reply(p_evt->conn_handle, &conn_sec_config);
         break;
     }
+
+    case PM_EVT_LOCAL_DB_CACHE_APPLIED:
+        // Re-push battery level once Peer Manager restores CCCD state on bonded reconnect.
+        battery_service_on_db_cache_applied(p_evt->conn_handle);
+        break;
 
     case PM_EVT_LOCAL_DB_CACHE_APPLY_FAILED:
         // Notify bonded hosts (e.g. macOS) when GATT attribute handles shifted after FW upgrade.
@@ -1293,6 +1332,9 @@ static void advertising_init(void)
 
 void ble_passkey_send(uint8_t const* p_key)
 {
+    if (storage_degraded()) {
+        return;
+    }
     ret_code_t err_code = sd_ble_gap_auth_key_reply(
         m_conn_handle,
         BLE_GAP_AUTH_KEY_TYPE_PASSKEY,
@@ -1303,9 +1345,12 @@ void ble_passkey_send(uint8_t const* p_key)
 
 void ble_services_init()
 {
+    if (storage_degraded()) {
+        return;
+    }
     peer_manager_init();
 #ifdef MULTI_DEVICE_SWITCH
-    switch_device_init();
+    switch_device_load();
 #endif
     gap_params_init();
     gatt_init();

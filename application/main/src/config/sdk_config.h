@@ -2236,7 +2236,7 @@
  
 
 #ifndef NRFX_PRS_BOX_2_ENABLED
-#define NRFX_PRS_BOX_2_ENABLED 1
+#define NRFX_PRS_BOX_2_ENABLED 0
 #endif
 
 // <q> NRFX_PRS_BOX_3_ENABLED  - Enables box 3 in the module.
@@ -2250,7 +2250,7 @@
  
 
 #ifndef NRFX_PRS_BOX_4_ENABLED
-#define NRFX_PRS_BOX_4_ENABLED 1
+#define NRFX_PRS_BOX_4_ENABLED 0
 #endif
 
 // <e> NRFX_PRS_CONFIG_LOG_ENABLED - Enables logging in the module.
@@ -3866,11 +3866,11 @@
 // <e> NRFX_UART_ENABLED - nrfx_uart - UART peripheral driver
 //==========================================================
 #ifndef NRFX_UART_ENABLED
-#define NRFX_UART_ENABLED 1
+#define NRFX_UART_ENABLED 0
 #endif
 // <o> NRFX_UART0_ENABLED - Enable UART0 instance 
 #ifndef NRFX_UART0_ENABLED
-#define NRFX_UART0_ENABLED 1
+#define NRFX_UART0_ENABLED 0
 #endif
 
 // <o> NRFX_UART_DEFAULT_CONFIG_HWFC  - Hardware Flow Control
@@ -5178,7 +5178,7 @@
 // <e> UART0_ENABLED - Enable UART0 instance
 //==========================================================
 #ifndef UART0_ENABLED
-#define UART0_ENABLED 1
+#define UART0_ENABLED 0
 #endif
 // <q> UART0_CONFIG_USE_EASY_DMA  - Default setting for using EasyDMA
  
@@ -5943,7 +5943,7 @@
 // <i> Increase this value if you frequently get synchronous FDS_ERR_NO_SPACE_IN_QUEUES errors.
 
 #ifndef FDS_OP_QUEUE_SIZE
-#define FDS_OP_QUEUE_SIZE 4
+#define FDS_OP_QUEUE_SIZE 8
 #endif
 
 // </h> 

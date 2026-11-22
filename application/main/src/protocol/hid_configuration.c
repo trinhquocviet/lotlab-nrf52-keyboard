@@ -2,10 +2,13 @@
 #include <string.h>
 
 #include "hid_configuration.h"
+#include "app_timer.h"
 #include "nordic_common.h"
+#include "nrf_soc.h"
 #include "usb_comm.h"
 #include "util.h"
 #include "ble_gap.h"
+#include "../main.h"
 
 #include "action.h"
 #include "data_storage.h"
@@ -85,6 +88,17 @@ static struct hid_config_section* hid_config_get(uint8_t id)
 
 static const struct host_driver* last_driver = NULL;
 static uint8_t current_packet_size = 56;
+APP_TIMER_DEF(m_format_reset_timer);
+static bool s_format_timer_created = false;
+
+static void format_reset_timer_handler(void* p_context)
+{
+    UNUSED_PARAMETER(p_context);
+    (void)sd_power_gpregret_clr(1, 0xFF);
+    (void)sd_power_gpregret_set(1, STORAGE_FORMAT_MAGIC);
+    wdt_feed_raw();
+    NVIC_SystemReset();
+}
 
 /**
  * @brief 响应HID成功命令
@@ -154,7 +168,7 @@ static void send_information_sub_1()
     memcpy(info, ble_addr.addr, BLE_GAP_ADDR_LEN);
 
     info[6] = current_packet_size;
-    info[7] = 0;
+    info[7] = storage_degraded() ? 0x01U : 0x00U;
     hid_response_success(sizeof(info), info);
 }
 
@@ -461,8 +475,7 @@ static void set_all_macro(uint8_t id, uint8_t len, uint8_t* data)
  */
 static void write_data(uint8_t type)
 {
-    storage_write(type);
-    hid_response_generic(HID_RESP_SUCCESS);
+    hid_response_generic(storage_write(type) ? HID_RESP_SUCCESS : HID_RESP_INTERNAL_ERROR);
 }
 
 /**
@@ -571,16 +584,46 @@ void hid_on_recv(const struct host_driver* driver, uint8_t command, uint8_t len,
             set_single_fn(data[0], UINT16_READ(data, 1));
         break;
     case HID_CMD_SET_ALL_KEYS:
-        set_all_keys(data[0], len - 1, &data[1]);
+        if (len < 1 || (uint8_t)(len - 1) > MAX_HID_PACKET_SIZE) {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        } else {
+            set_all_keys(data[0], len - 1, &data[1]);
+        }
         break;
     case HID_CMD_SET_ALL_FNS:
-        set_all_fns(data[0], len - 1, &data[1]);
+        if (len < 1 || (uint8_t)(len - 1) > MAX_HID_PACKET_SIZE) {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        } else {
+            set_all_fns(data[0], len - 1, &data[1]);
+        }
         break;
     case HID_CMD_SET_SINGLE_CONFIG:
         set_single_config(data[0], len - 1, &data[1]);
         break;
     case HID_CMD_SET_ALL_MACRO:
-        set_all_macro(data[0], len - 1, &data[1]);
+        if (len < 1 || (uint8_t)(len - 1) > MAX_HID_PACKET_SIZE) {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        } else {
+            set_all_macro(data[0], len - 1, &data[1]);
+        }
+        break;
+    case HID_CMD_FORMAT_STORAGE:
+        if (len != 4 || data[0] != 0x46U || data[1] != 0x44U || data[2] != 0x53U || data[3] != 0x21U) {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        } else {
+            if (!s_format_timer_created) {
+                if (app_timer_create(&m_format_reset_timer, APP_TIMER_MODE_SINGLE_SHOT, format_reset_timer_handler) == NRF_SUCCESS) {
+                    s_format_timer_created = true;
+                }
+            }
+            if (!s_format_timer_created) {
+                hid_response_generic(HID_RESP_INTERNAL_ERROR);
+            } else {
+                hid_response_generic(HID_RESP_SUCCESS);
+                (void)app_timer_stop(m_format_reset_timer);
+                (void)app_timer_start(m_format_reset_timer, APP_TIMER_TICKS(200), NULL);
+            }
+        }
         break;
     case HID_CMD_READ_CONFIG:
         if (len != 1)

@@ -208,9 +208,9 @@ static void hids_init(ble_srv_error_handler_t err_handler)
     hids_init_obj.feature_rep_count = 0;
     hids_init_obj.p_feature_rep_array = NULL;
     hids_init_obj.rep_map.data_len = sizeof(hid_descriptor);
-    hids_init_obj.rep_map.p_data = hid_descriptor;
+    hids_init_obj.rep_map.p_data = (uint8_t*)hid_descriptor;
     hids_init_obj.hid_information.bcd_hid = BASE_USB_HID_SPEC_VERSION;
-    hids_init_obj.hid_information.b_country_code = 0;
+    hids_init_obj.hid_information.b_country_code = 0x21; // United States (ANSI), USB HID 1.11 §6.2.1
     hids_init_obj.hid_information.flags = HID_INFO_FLAG_REMOTE_WAKE_MSK | HID_INFO_FLAG_NORMALLY_CONNECTABLE_MSK;
     hids_init_obj.included_services_count = 0;
     hids_init_obj.p_included_services_array = NULL;
@@ -303,9 +303,33 @@ static uint32_t buffer_enqueue(ble_hids_t* p_hids,
         : (uint8_t)pattern_len;
 
     if (BUFFER_LIST_FULL()) {
-        // Overwrite the newest queued entry so the latest state (especially key-up) is never dropped.
-        uint8_t last = (uint8_t)((buffer_list.wp + MAX_BUFFER_ENTRIES - 1) % MAX_BUFFER_ENTRIES);
-        element = &buffer_list.buffer[last];
+        // Replace the newest queued entry with the same report_index so different
+        // report types (e.g. Consumer/System key-up) are never clobbered by keyboard traffic.
+        element = NULL;
+        uint8_t idx = buffer_list.wp;
+        for (uint8_t scanned = 0; scanned < buffer_list.count; scanned++) {
+            idx = (uint8_t)((idx + MAX_BUFFER_ENTRIES - 1U) % MAX_BUFFER_ENTRIES);
+            if (buffer_list.buffer[idx].index == report_index) {
+                element = &buffer_list.buffer[idx];
+                break;
+            }
+        }
+        if (element == NULL) {
+            // No entry of this report_index exists; drop the oldest entry at rp and enqueue at wp.
+            BUFFER_ELEMENT_INIT(buffer_list.rp);
+            buffer_list.rp++;
+            if (buffer_list.rp == MAX_BUFFER_ENTRIES) {
+                buffer_list.rp = 0;
+            }
+            buffer_list.count--;
+
+            element = &buffer_list.buffer[buffer_list.wp];
+            buffer_list.count++;
+            buffer_list.wp++;
+            if (buffer_list.wp == MAX_BUFFER_ENTRIES) {
+                buffer_list.wp = 0;
+            }
+        }
     } else {
         element = &buffer_list.buffer[buffer_list.wp];
         buffer_list.count++;

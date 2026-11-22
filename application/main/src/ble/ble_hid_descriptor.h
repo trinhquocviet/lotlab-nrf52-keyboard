@@ -2,7 +2,7 @@
 
 #include "report.h"
 
-static uint8_t hid_descriptor[] = {
+static const uint8_t hid_descriptor[] = {
     0x05, 0x01, // Usage Page (Generic Desktop)
     0x09, 0x06, // Usage (Keyboard)
     0xA1, 0x01, // Collection (Application)
