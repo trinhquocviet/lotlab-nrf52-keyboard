@@ -100,12 +100,18 @@ void keyboard_led_rgb_set(uint32_t color)
 static void keyboard_led_lppwm_start()
 {
     uint32_t err_code;
-    err_code = low_power_pwm_start(&led_r, led_r.bit_mask);
-    APP_ERROR_CHECK(err_code);
-    err_code = low_power_pwm_start(&led_g, led_g.bit_mask);
-    APP_ERROR_CHECK(err_code);
-    err_code = low_power_pwm_start(&led_b, led_b.bit_mask);
-    APP_ERROR_CHECK(err_code);
+    if (led_r.pwm_state == NRFX_DRV_STATE_INITIALIZED) {
+        err_code = low_power_pwm_start(&led_r, led_r.bit_mask);
+        APP_ERROR_CHECK(err_code);
+    }
+    if (led_g.pwm_state == NRFX_DRV_STATE_INITIALIZED) {
+        err_code = low_power_pwm_start(&led_g, led_g.bit_mask);
+        APP_ERROR_CHECK(err_code);
+    }
+    if (led_b.pwm_state == NRFX_DRV_STATE_INITIALIZED) {
+        err_code = low_power_pwm_start(&led_b, led_b.bit_mask);
+        APP_ERROR_CHECK(err_code);
+    }
 }
 /**
  * @brief 停止PWM
@@ -114,12 +120,24 @@ static void keyboard_led_lppwm_start()
 static void keyboard_led_lppwm_stop()
 {
     uint32_t err_code;
-    err_code = low_power_pwm_stop(&led_r);
-    APP_ERROR_CHECK(err_code);
-    err_code = low_power_pwm_stop(&led_g);
-    APP_ERROR_CHECK(err_code);
-    err_code = low_power_pwm_stop(&led_g);
-    APP_ERROR_CHECK(err_code);
+    if (led_r.pwm_state == NRFX_DRV_STATE_POWERED_ON) {
+        err_code = low_power_pwm_stop(&led_r);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE) {
+            APP_ERROR_CHECK(err_code);
+        }
+    }
+    if (led_g.pwm_state == NRFX_DRV_STATE_POWERED_ON) {
+        err_code = low_power_pwm_stop(&led_g);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE) {
+            APP_ERROR_CHECK(err_code);
+        }
+    }
+    if (led_b.pwm_state == NRFX_DRV_STATE_POWERED_ON) {
+        err_code = low_power_pwm_stop(&led_b);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE) {
+            APP_ERROR_CHECK(err_code);
+        }
+    }
 }
 
 /**

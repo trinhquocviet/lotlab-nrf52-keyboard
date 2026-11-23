@@ -1,38 +1,42 @@
 #pragma once
 
+#include <stdbool.h>
+
 #define QUEUE(TYPE, NAME, SIZE)                                          \
-    TYPE NAME[SIZE];                                                     \
-    const int NAME##_size = SIZE;                                        \
+    static TYPE NAME[SIZE];                                              \
+    static const int NAME##_size = SIZE;                                 \
     static int NAME##_front = 0, NAME##_rear = 0;                        \
     static bool NAME##_full = false;                                     \
-    void NAME##_pop()                                                    \
+    static inline void NAME##_pop(void)                                  \
     {                                                                    \
         if (NAME##_full || NAME##_front != NAME##_rear) {                \
-            NAME##_rear = ++NAME##_rear < NAME##_size ? NAME##_rear : 0; \
-            if (NAME##_full)                                             \
-                NAME##_full = false;                                     \
+            NAME##_rear = (NAME##_rear + 1) % NAME##_size;               \
+            NAME##_full = false;                                         \
         }                                                                \
     }                                                                    \
-    void NAME##_push(TYPE item)                                          \
+    static inline bool NAME##_push(TYPE item)                            \
     {                                                                    \
+        if (NAME##_full) {                                               \
+            return false;                                                \
+        }                                                                \
         NAME[NAME##_front] = item;                                       \
         NAME##_front = (NAME##_front + 1) % NAME##_size;                 \
-        if (NAME##_full)                                                 \
-            NAME##_rear = NAME##_front;                                  \
-        else if (NAME##_rear == NAME##_front)                            \
+        if (NAME##_front == NAME##_rear) {                               \
             NAME##_full = true;                                          \
+        }                                                                \
+        return true;                                                     \
     }                                                                    \
-    bool NAME##_empty()                                                  \
+    static inline bool NAME##_empty(void)                                \
     {                                                                    \
         return (!NAME##_full && NAME##_front == NAME##_rear);            \
     }                                                                    \
-    TYPE* NAME##_peek()                                                  \
+    static inline TYPE* NAME##_peek(void)                                \
     {                                                                    \
         if (NAME##_empty())                                              \
             return 0;                                                    \
         return &NAME[NAME##_rear];                                       \
     }                                                                    \
-    void NAME##_clear()                                                  \
+    static inline void NAME##_clear(void)                                \
     {                                                                    \
         NAME##_front = 0;                                                \
         NAME##_rear = 0;                                                 \
@@ -46,12 +50,20 @@
 #define MIXED_QUEUE(TYPE, NAME, SIZE)                                                                   \
     static uint16_t NAME##_head, NAME##_tail;                                                           \
     static uint8_t NAME##_data[SIZE];                                                                   \
-    bool NAME##_empty()                                                                                 \
+    static inline bool NAME##_empty(void)                                                               \
     {                                                                                                   \
         return NAME##_tail == NAME##_head;                                                              \
     }                                                                                                   \
                                                                                                         \
-    void NAME##_dequeue()                                                                               \
+    static inline uint16_t NAME##_free_space(void)                                                      \
+    {                                                                                                   \
+        uint16_t used = (NAME##_tail >= NAME##_head)                                                    \
+            ? (uint16_t)(NAME##_tail - NAME##_head)                                                     \
+            : (uint16_t)((SIZE) - NAME##_head + NAME##_tail);                                           \
+        return (uint16_t)((SIZE) - 1U - used);                                                          \
+    }                                                                                                   \
+                                                                                                        \
+    static inline void NAME##_dequeue(void)                                                             \
     {                                                                                                   \
         if (NAME##_empty())                                                                             \
             return;                                                                                     \
@@ -59,7 +71,7 @@
         NAME##_head = (NAME##_head + len + 1) % SIZE;                                                   \
     }                                                                                                   \
                                                                                                         \
-    uint8_t NAME##_peek(uint8_t* pointer)                                                               \
+    static inline uint8_t NAME##_peek(uint8_t* pointer)                                                 \
     {                                                                                                   \
         uint8_t len = NAME##_data[NAME##_head];                                                         \
         if (len + NAME##_head >= SIZE) {                                                                \
@@ -74,13 +86,12 @@
         return len;                                                                                     \
     }                                                                                                   \
                                                                                                         \
-    void NAME##_enqueue(uint8_t len, uint8_t* data)                                                     \
+    static inline bool NAME##_enqueue(uint8_t len, uint8_t* data)                                       \
     {                                                                                                   \
-        uint16_t next_tail = (NAME##_tail + len + 1);                                                   \
-        while ((NAME##_tail < NAME##_head && next_tail >= NAME##_head)                                  \
-            || (NAME##_tail > NAME##_head && next_tail >= SIZE && (next_tail % SIZE) >= NAME##_head)) { \
-            NAME##_dequeue();                                                                           \
+        if ((uint16_t)(len + 1U) > NAME##_free_space()) {                                               \
+            return false;                                                                               \
         }                                                                                               \
+        uint16_t next_tail = (uint16_t)(NAME##_tail + len + 1U);                                        \
         NAME##_data[NAME##_tail] = len;                                                                 \
         if (next_tail > SIZE) {                                                                         \
             uint8_t len1 = SIZE - NAME##_tail - 1;                                                      \
@@ -92,9 +103,10 @@
             memcpy(&NAME##_data[NAME##_tail + 1], data, len);                                           \
         }                                                                                               \
         NAME##_tail = next_tail % SIZE;                                                                 \
+        return true;                                                                                    \
     }                                                                                                   \
                                                                                                         \
-    void NAME##_clear()                                                                                 \
+    static inline void NAME##_clear(void)                                                               \
     {                                                                                                   \
         NAME##_tail = 0;                                                                                \
         NAME##_head = 0;                                                                                \

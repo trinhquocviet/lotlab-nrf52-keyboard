@@ -94,9 +94,12 @@ static void keyboard_sleep_handler(void* p_context)
     if (powersave)
         sleep_counter++;
 
-    if (sleep_counter == get_slow_scan_timeout()) {
+    uint16_t slow_timeout = get_slow_scan_timeout();
+    uint16_t sleep_timeout = get_sleep_timeout();
+    if (slow_timeout > 0 && sleep_counter == slow_timeout) {
         keyboard_switch_scan_mode(true);
-    } else if (sleep_counter == get_sleep_timeout()) {
+    }
+    if (sleep_timeout > 0 && sleep_counter == sleep_timeout) {
         sleep(SLEEP_TIMEOUT);
     }
 
@@ -110,7 +113,8 @@ static void keyboard_sleep_handler(void* p_context)
  */
 static void keyboard_sleep_counter_reset(void)
 {
-    if (sleep_counter >= get_slow_scan_timeout()) {
+    uint16_t slow_timeout = get_slow_scan_timeout();
+    if (slow_timeout > 0 && sleep_counter >= slow_timeout) {
         keyboard_switch_scan_mode(false);
     }
     sleep_counter = 0;
@@ -180,7 +184,9 @@ void keyboard_debounce(void)
 {
     // 启用消抖定时器，使用快速扫描间隔扫描
     ret_code_t err_code = app_timer_start(m_keyboard_debounce_timer, DEBOUNCE_INTERVAL, NULL);
-    APP_ERROR_CHECK(err_code);
+    if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_NO_MEM && err_code != NRF_ERROR_INVALID_STATE) {
+        APP_ERROR_CHECK(err_code);
+    }
 }
 
 /**

@@ -2,7 +2,7 @@
 
 #include "report.h"
 
-static uint8_t hid_descriptor[] = {
+static const uint8_t hid_descriptor[] = {
     0x05, 0x01, // Usage Page (Generic Desktop)
     0x09, 0x06, // Usage (Keyboard)
     0xA1, 0x01, // Collection (Application)
@@ -112,9 +112,9 @@ static uint8_t hid_descriptor[] = {
     0xa1, 0x01, // COLLECTION (Application)
     0x85, REPORT_ID_CONSUMER, //   REPORT_ID (3)
     0x15, 0x01, //   LOGICAL_MINIMUM (0x1)
-    0x26, 0x9c, 0x02, //   LOGICAL_MAXIMUM (0x29c)
+    0x26, 0xa2, 0x02, //   LOGICAL_MAXIMUM (0x2a2)
     0x19, 0x01, //   USAGE_MINIMUM (0x1)
-    0x2a, 0x9c, 0x02, //   USAGE_MAXIMUM (0x29c)
+    0x2a, 0xa2, 0x02, //   USAGE_MAXIMUM (0x2a2)
     0x75, 0x10, //   REPORT_SIZE (16)
     0x95, 0x01, //   REPORT_COUNT (1)
     0x81, 0x00, //   INPUT (Data,Array,Abs)

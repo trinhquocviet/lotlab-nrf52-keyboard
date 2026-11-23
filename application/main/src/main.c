@@ -71,9 +71,11 @@
  */
 
 #include "app_error.h"
+#include "app_util.h"
 #include "nordic_common.h"
 #include "nrf.h"
 #include "nrf_assert.h"
+#include "nrf_nvmc.h"
 #include "nrf_soc.h"
 #include <stdint.h>
 #include <string.h>
@@ -81,6 +83,7 @@
 #include "app_scheduler.h"
 #include "app_timer.h"
 #include "fds.h"
+#include "fds_internal_defs.h"
 #include "nrf_delay.h"
 #include "nrf_pwr_mgmt.h"
 
@@ -93,7 +96,9 @@
 #include "keyboard/adc_convert.h"
 #include "keyboard/ble_keyboard.h"
 #include "keyboard/data_storage.h"
+#include "keyboard/keyboard_battery.h"
 #include "keyboard/keyboard_bootcheck.h"
+#include "keyboard/sleep_reason.h"
 #include "keyboard/keyboard_command.h"
 #include "keyboard/keyboard_evt.h"
 #include "keyboard/keyboard_led.h"
@@ -104,15 +109,77 @@
 
 #define SCHED_MAX_EVENT_DATA_SIZE APP_TIMER_SCHED_EVENT_DATA_SIZE /**< Maximum size of scheduler events. */
 #ifdef SVCALL_AS_NORMAL_FUNCTION
-#define SCHED_QUEUE_SIZE 30 /**< Maximum number of events in the scheduler queue. More is needed in case of Serialization. */
+#define SCHED_QUEUE_SIZE 32 /**< Maximum number of events in the scheduler queue. More is needed in case of Serialization. */
 #else
-#define SCHED_QUEUE_SIZE 20 /**< Maximum number of events in the scheduler queue. */
+#define SCHED_QUEUE_SIZE 32 /**< Maximum number of events in the scheduler queue. */
 #endif
 
 // 自定义Bootloader地址的设置
 #ifdef CUSTOM_BOOTLOADER_ADDR
 uint32_t bootloader_addr __attribute__((section(".mbr_bootloader_addr"))) __attribute__((used)) = CUSTOM_BOOTLOADER_ADDR;
 #endif
+
+extern uint32_t __data_start__;
+extern uint32_t __bss_start__;
+
+void wdt_feed_raw(void)
+{
+    if (NRF_WDT->RUNSTATUS) {
+        for (uint32_t ch = 0; ch < 8U; ch++) {
+            if (NRF_WDT->RREN & (1UL << ch)) {
+                NRF_WDT->RR[ch] = WDT_RR_RR_Reload;
+            }
+        }
+    }
+}
+
+static uint32_t fds_flash_end_addr_compat(void)
+{
+    uint32_t const bootloader_addr = BOOTLOADER_ADDRESS;
+    uint32_t const page_sz = NRF_FICR->CODEPAGESIZE;
+
+#if defined(NRF52810_XXAA) || defined(NRF52811_XXAA)
+    uint32_t const code_sz = 48U;
+#else
+    uint32_t const code_sz = NRF_FICR->CODESIZE;
+#endif
+
+    uint32_t end_addr = (bootloader_addr != 0xFFFFFFFFUL) ? bootloader_addr : (code_sz * page_sz);
+    return end_addr - (FDS_PHY_PAGES_RESERVED * FDS_PHY_PAGE_SIZE * sizeof(uint32_t));
+}
+
+static void boot_format_storage_if_requested(void)
+{
+    if ((NRF_POWER->GPREGRET2 & 0xFFU) != STORAGE_FORMAT_MAGIC) {
+        return;
+    }
+    // Clear first so a mid-erase reset can never enter a format boot loop.
+    NRF_POWER->GPREGRET2 = 0U;
+
+    uint32_t const page_sz = NRF_FICR->CODEPAGESIZE;
+#if defined(NRF52810_XXAA) || defined(NRF52811_XXAA)
+    uint32_t const code_sz = 48U;
+#else
+    uint32_t const code_sz = NRF_FICR->CODESIZE;
+#endif
+    uint32_t const end = fds_flash_end_addr_compat();
+    uint32_t const fds_bytes = FDS_PHY_PAGES * FDS_PHY_PAGE_SIZE * sizeof(uint32_t);
+    if (page_sz == 0U || end < fds_bytes) {
+        return;
+    }
+    uint32_t const start = end - fds_bytes;
+
+    uint32_t const raw_app_end = (uint32_t)&__etext + ((uint32_t)&__bss_start__ - (uint32_t)&__data_start__);
+    uint32_t const app_flash_end = (raw_app_end + page_sz - 1U) & ~(page_sz - 1U);
+    if (start < app_flash_end || end > code_sz * page_sz || start >= end || (start % page_sz) != 0U) {
+        return;
+    }
+
+    for (uint32_t a = start; a < end; a += page_sz) {
+        nrf_nvmc_page_erase(a);
+        wdt_feed_raw();
+    }
+}
 
 static void set_stage(enum keyboard_state stage)
 {
@@ -274,6 +341,7 @@ void sleep(enum SLEEP_REASON reason)
         sleep_mode_enter(false);
         break;
     case SLEEP_NOT_PWRON:
+        sleep_reason_set(false);
         sleep_mode_enter(true);
         break;
     default:
@@ -310,10 +378,25 @@ static void idle_state_handle(void)
 
 bool erase_bonds = false;
 
+extern uint32_t __StackLimit;
+
+__attribute__((noinline)) static void stack_paint(void)
+{
+    volatile uint32_t* p = &__StackLimit;
+    uintptr_t top = ((uintptr_t)__get_MSP() - 64U) & ~3UL;
+    while ((uintptr_t)p < top) {
+        *p++ = DEAD_BEEF;
+    }
+}
+
 /**@brief Function for application main entry.
  */
 int main(void)
 {
+    stack_paint();
+    // Format FDS pages cleanly before SoftDevice/FDS/PM initialization when requested.
+    boot_format_storage_if_requested();
+
     // Initialize.
     timers_init();
     power_management_init();
@@ -327,10 +410,15 @@ int main(void)
     sd_power_dcdc_mode_set(1);
 #endif
     scheduler_init();
-    ble_services_init();
-    battery_service_init();
-    hid_service_init(service_error_handler);
+    if (!storage_degraded()) {
+        ble_services_init();
+    }
     adc_init();
+    keyboard_battery_init_sample();
+    if (!storage_degraded()) {
+        battery_service_init();
+        hid_service_init(service_error_handler);
+    }
     ble_keyboard_init();
 
 #if !defined(BOOTMAGIC_ENABLE) && defined(BOOTCHECK_ENABLE)
@@ -343,9 +431,13 @@ int main(void)
 
     // Start execution.
     timers_start();
-    advertising_start(erase_bonds);
+    if (!storage_degraded()) {
+        advertising_start(erase_bonds);
+    }
 
     set_stage(KBD_STATE_INITED);
+    // Mark this boot as active so soft resets do not lock behind Space+U.
+    sleep_reason_set(true);
 
     // Enter main loop.
     for (;;) {

@@ -18,11 +18,26 @@
 #define KEYMAP_ROW_SIZE (MATRIX_COLS * SINGLE_KEY_SIZE)
 #define KEYMAP_LAYER_SIZE (MATRIX_ROWS * KEYMAP_ROW_SIZE)
 
-// Extended device configuration record (0x0498, 24 bytes = 6 words)
+// Extended device configuration record (0x0498, 56 bytes = 14 words)
 #define EXT_CONFIG_MAGIC 0xA5
-#define EXT_CONFIG_VERSION 0x01
+#define EXT_CONFIG_VERSION 0x02
+#define EXT_CONFIG_V1_WORDS 6
 #define MAX_CUSTOM_NAME_BYTES 16
 #define CHANNEL_PROFILE_COUNT 4
+#define LED_COLOR_COUNT 10
+
+enum led_color_slot {
+    LED_SLOT_BLE0 = 0,
+    LED_SLOT_BLE1 = 1,
+    LED_SLOT_BLE2 = 2,
+    LED_SLOT_IDLE = 3,
+    LED_SLOT_USB = 4,
+    LED_SLOT_CHARGING = 5,
+    LED_SLOT_FULL = 6,
+    LED_SLOT_PASSKEY_REQ = 7,
+    LED_SLOT_PASSKEY_SEND = 8,
+    LED_SLOT_SLEEP = 9,
+};
 
 // Channel profile byte masks (channel: 0=BLE0, 1=BLE1, 2=BLE2, 3=USB)
 #define CH_BASE_LAYER_MASK 0x07
@@ -38,6 +53,8 @@ typedef struct __attribute__((packed)) {
     uint8_t reserved;
     uint8_t custom_name[MAX_CUSTOM_NAME_BYTES];
     uint8_t channel_profile[CHANNEL_PROFILE_COUNT];
+    uint8_t led_colors[LED_COLOR_COUNT][3];
+    uint8_t led_reserved[2];
 } ext_config_t;
 
 /**
@@ -55,6 +72,7 @@ void storage_read(uint8_t mask);
 void storage_init(void);
 bool storage_write(uint8_t mask);
 void storage_delete(uint8_t mask);
+bool storage_degraded(void);
 uint16_t storage_read_data(enum storage_type type, uint16_t offset, uint16_t len, uint8_t* data);
 uint16_t storage_write_data(enum storage_type type, uint16_t offset, uint16_t len, uint8_t* data);
 
@@ -70,6 +88,7 @@ void keyboard_set_active_profile(uint8_t base_layer, uint8_t swap_flags);
 
 #ifdef CONFIG_STORAGE
 extern uint8_t config_block[];
+extern const uint8_t default_led_colors[LED_COLOR_COUNT][3];
 
 /**
  * @brief 配置记录区域

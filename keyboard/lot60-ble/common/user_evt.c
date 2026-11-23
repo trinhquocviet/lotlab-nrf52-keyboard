@@ -21,19 +21,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "main.h"
 
 #include "ble_keyboard.h"
+#include "ble_services.h"
+#include "data_storage.h"
 #include "keyboard_evt.h"
 #include "keyboard_led.h"
 #include "nrf_delay.h"
 #include "simple_rgb/led_rgb.h"
-
-#define COLOR_IDLE 0xFFFFFF // 白色: 空闲状态
-#define COLOR_BLE 0x66FFFF // 青色: 蓝牙连接
-#define COLOR_CHARGING 0xFF8000 // 橙色: 充电中
-#define COLOR_FULL 0x00FF00 // 绿色: 充电完毕
-#define COLOR_USB 0x0099ff // 蓝色: USB 已连接
-#define COLOR_PASSKEY_REQ 0xFFFF00 // 黄色: 请求输入配对码
-#define COLOR_PASSKEY_SEND 0xFF0080 // 粉红色: 配对码输入完毕
-#define COLOR_SLEEP 0xFF00FF // 紫红色: 睡眠
+#include "store_config.h"
 
 #ifdef PIN_CHARGING
 static bool is_charging = false;
@@ -41,25 +35,46 @@ static bool charging_full = false;
 #endif
 static bool ble_connected = false;
 static bool usb_working = false;
+static bool leds_inited = false;
 
-/**
- * @brief 按状态更改 LED 样式
- * 
- */
-static void led_status_change()
+static uint8_t current_ble_channel(void)
 {
-    if (usb_working) {
-        keyboard_led_rgb_set(COLOR_USB);
-#ifdef PIN_CHARGING
-    } else if (is_charging) {
-        keyboard_led_rgb_set(charging_full ? COLOR_FULL : COLOR_CHARGING);
+#ifdef MULTI_DEVICE_SWITCH
+    uint8_t ch = switch_device_get_id();
+    return (ch < 3) ? ch : 0U;
+#else
+    return 0U;
 #endif
-    } else {
-        keyboard_led_rgb_set(ble_connected ? COLOR_BLE : COLOR_IDLE);
-    }
 }
 
-static bool leds_inited = false;
+static uint32_t active_ble_color(void)
+{
+    return store_config_get_led_color((uint8_t)(LED_SLOT_BLE0 + current_ble_channel()));
+}
+
+#define LED_COLOR_DEGRADED 0xFF0000UL
+
+/**
+ * @brief Update RGB LED color for the active connection / charging state.
+ */
+static void led_status_change(void)
+{
+    if (storage_degraded()) {
+        keyboard_led_rgb_set(LED_COLOR_DEGRADED);
+        keyboard_led_rgb_switch(true);
+        return;
+    }
+    if (usb_working) {
+        keyboard_led_rgb_set(store_config_get_led_color(LED_SLOT_USB));
+#ifdef PIN_CHARGING
+    } else if (is_charging) {
+        keyboard_led_rgb_set(store_config_get_led_color(charging_full ? LED_SLOT_FULL : LED_SLOT_CHARGING));
+#endif
+    } else {
+        keyboard_led_rgb_set(ble_connected ? active_ble_color() : store_config_get_led_color(LED_SLOT_IDLE));
+    }
+    keyboard_led_rgb_switch(true);
+}
 
 void rgb_led_event_handler(enum user_event event, void* arg)
 {
@@ -78,6 +93,7 @@ void rgb_led_event_handler(enum user_event event, void* arg)
             if (leds_inited) {
                 nrf_delay_ms(20); // 等待睡眠指示灯显示完毕
                 keyboard_led_rgb_deinit();
+                leds_inited = false;
             }
             break;
         default:
@@ -109,6 +125,7 @@ void rgb_led_event_handler(enum user_event event, void* arg)
         case BATT_CHARGED:
             is_charging = true;
             charging_full = true;
+            break;
         default:
             break;
         }
@@ -116,14 +133,7 @@ void rgb_led_event_handler(enum user_event event, void* arg)
         break;
 #endif
     case USER_EVT_USB: // USB事件
-        switch (arg2) {
-        case USB_WORKING:
-            usb_working = true;
-            break;
-        default:
-            usb_working = false;
-            break;
-        }
+        usb_working = (arg2 == USB_WORKING);
         led_status_change();
         break;
     case USER_EVT_BLE_STATE_CHANGE: // 蓝牙事件
@@ -140,23 +150,35 @@ void rgb_led_event_handler(enum user_event event, void* arg)
             break;
         }
         break;
-    case USER_EVT_BLE_DEVICE_SWITCH: // 设备切换事件
-        led_status_change(); // 暂时先把灯亮起来
+    case USER_EVT_BLE_DEVICE_SWITCH: // Show selected BLE channel color immediately
+        if (!usb_working && leds_inited) {
+            keyboard_led_rgb_set(active_ble_color());
+            keyboard_led_rgb_switch(true);
+        } else {
+            led_status_change();
+        }
         break;
     case USER_EVT_BLE_PASSKEY_STATE: // 请求Passkey
         switch (arg2) {
         case PASSKEY_STATE_REQUIRE:
-            keyboard_led_rgb_set(COLOR_PASSKEY_REQ);
+            keyboard_led_rgb_set(store_config_get_led_color(LED_SLOT_PASSKEY_REQ));
+            keyboard_led_rgb_switch(true);
             break;
         case PASSKEY_STATE_SEND:
-            keyboard_led_rgb_set(COLOR_PASSKEY_SEND);
+            keyboard_led_rgb_set(store_config_get_led_color(LED_SLOT_PASSKEY_SEND));
+            keyboard_led_rgb_switch(true);
             break;
         default:
             break;
         }
         break;
     case USER_EVT_SLEEP: // 睡眠指示
-        keyboard_led_rgb_direct(COLOR_SLEEP);
+        keyboard_led_rgb_direct(store_config_get_led_color(LED_SLOT_SLEEP));
+        break;
+    case USER_EVT_LED:
+        if (leds_inited) {
+            led_status_change();
+        }
         break;
     default:
         break;

@@ -37,11 +37,21 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "nrf_sdh_soc.h"
 #include "peer_manager_handler.h"
 
+#include "ble_bas_service.h"
 #include "ble_config.h"
 #include "data_storage.h"
+#include "nordic_common.h"
 #include "store_config.h"
 #include "util.h"
 #include <string.h>
+
+#ifndef HARDWARE_REV_STR
+#define HARDWARE_REV_STR "Rev.1"
+#endif
+
+#ifndef VERSION
+#define VERSION 00000000
+#endif
 
 #define PNP_ID_VENDOR_ID_SOURCE 0x02 /**< Vendor ID Source. */
 
@@ -59,9 +69,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define APP_ADV_SLOW_DURATION 18000 /**< The advertising duration of slow advertising in units of 10 milliseconds. */
 
 /*lint -emacro(524, MIN_CONN_INTERVAL) // Loss of precision */
-#define MIN_CONN_INTERVAL MSEC_TO_UNITS(15, UNIT_1_25_MS) /**< Minimum connection interval (15 ms) */
-#define MAX_CONN_INTERVAL MSEC_TO_UNITS(30, UNIT_1_25_MS) /**< Maximum connection interval (30 ms). */
-#define SLAVE_LATENCY 15 /**< Slave latency. */
+#define MIN_CONN_INTERVAL MSEC_TO_UNITS(12, UNIT_1_25_MS) /**< Minimum connection interval (11.25-12 ms) */
+#define MAX_CONN_INTERVAL MSEC_TO_UNITS(15, UNIT_1_25_MS) /**< Maximum connection interval (15 ms). */
+#define SLAVE_LATENCY 6 /**< Slave latency. */
 #define CONN_SUP_TIMEOUT MSEC_TO_UNITS(4000, UNIT_10_MS) /**< Connection supervisory timeout (4000 ms). */
 
 uint16_t m_conn_handle = BLE_CONN_HANDLE_INVALID; /**< Handle of the current connection. */
@@ -88,10 +98,16 @@ NRF_BLE_QWR_DEF(m_qwr); /**< Context for the Queued Write module.*/
 BLE_ADVERTISING_DEF(m_advertising); /**< Advertising module instance. */
 
 static ble_uuid_t m_adv_uuids[] = { { BLE_UUID_HUMAN_INTERFACE_DEVICE_SERVICE, BLE_UUID_TYPE_BLE } };
+static ble_uuid_t m_sr_uuids[] = {
+    { BLE_UUID_BATTERY_SERVICE, BLE_UUID_TYPE_BLE },
+    { BLE_UUID_DEVICE_INFORMATION_SERVICE, BLE_UUID_TYPE_BLE },
+};
 
 static void advertising_config_get(ble_adv_modes_config_t* p_config);
 
 #ifdef MULTI_DEVICE_SWITCH
+static bool s_switch_device_needs_persist = false;
+
 static uint8_t peer_id_filter(pm_peer_id_t* peer_ids, uint8_t peer_id_count)
 {
     uint8_t real_count = 0;
@@ -116,7 +132,8 @@ static void switch_device_reset()
     switch_storage->magic = SWITCH_ID_MAGIC;
     for (int8_t i = 0; i < MAX_HOST_COUNT; i++)
         switch_storage->peers_id[i] = PM_PEER_ID_INVALID;
-    
+
+    s_switch_device_needs_persist = false;
     switch_device_id_update();
 }
 
@@ -129,18 +146,56 @@ static void switch_device_reset()
  *
  * @param[in] skip  Filter passed to @ref pm_peer_id_list.
  */
-static void whitelist_set(pm_peer_id_list_skip_t skip)
+static void clear_stale_active_peer(void)
 {
-    pm_peer_id_t peer_ids[BLE_GAP_WHITELIST_ADDR_MAX_COUNT];
-    uint32_t peer_id_count = BLE_GAP_WHITELIST_ADDR_MAX_COUNT;
+#ifdef MULTI_DEVICE_SWITCH
+    if (switch_storage->peers_id[switch_storage->id] != PM_PEER_ID_INVALID) {
+        switch_storage->peers_id[switch_storage->id] = PM_PEER_ID_INVALID;
+        switch_device_id_update();
+    }
+#endif
+    m_peer_id = PM_PEER_ID_INVALID;
+}
 
+static uint32_t active_peer_ids_load(pm_peer_id_list_skip_t skip, pm_peer_id_t* peer_ids, uint32_t max_count)
+{
+    uint32_t peer_id_count = max_count;
     ret_code_t err_code = pm_peer_id_list(peer_ids, &peer_id_count, PM_PEER_ID_INVALID, skip);
-    APP_ERROR_CHECK(err_code);
+    if (err_code != NRF_SUCCESS) {
+        return 0;
+    }
 
     peer_id_count = peer_id_filter(peer_ids, peer_id_count);
 
-    err_code = pm_whitelist_set(peer_ids, peer_id_count);
-    APP_ERROR_CHECK(err_code);
+#ifdef MULTI_DEVICE_SWITCH
+    if (peer_id_count > 0) {
+        pm_peer_data_bonding_t bonding_data;
+        if (pm_peer_data_bonding_load(peer_ids[0], &bonding_data) == NRF_ERROR_NOT_FOUND) {
+            clear_stale_active_peer();
+            return 0;
+        }
+    }
+#endif
+    return peer_id_count;
+}
+
+static void whitelist_set(pm_peer_id_list_skip_t skip)
+{
+    pm_peer_id_t peer_ids[BLE_GAP_WHITELIST_ADDR_MAX_COUNT];
+    uint32_t peer_id_count = active_peer_ids_load(skip, peer_ids, BLE_GAP_WHITELIST_ADDR_MAX_COUNT);
+
+    ret_code_t err_code = pm_whitelist_set(peer_ids, peer_id_count);
+    if (err_code == NRF_ERROR_NOT_FOUND || err_code == BLE_ERROR_GAP_INVALID_BLE_ADDR) {
+        clear_stale_active_peer();
+        (void)pm_whitelist_set(NULL, 0);
+        return;
+    }
+    if (err_code != NRF_SUCCESS
+        && err_code != BLE_ERROR_GAP_WHITELIST_IN_USE
+        && err_code != NRF_ERROR_INVALID_STATE
+        && err_code != NRF_ERROR_INVALID_PARAM) {
+        APP_ERROR_CHECK(err_code);
+    }
 }
 
 /**
@@ -151,15 +206,20 @@ static void whitelist_set(pm_peer_id_list_skip_t skip)
 static void identities_set(pm_peer_id_list_skip_t skip)
 {
     pm_peer_id_t peer_ids[BLE_GAP_DEVICE_IDENTITIES_MAX_COUNT];
-    uint32_t peer_id_count = BLE_GAP_DEVICE_IDENTITIES_MAX_COUNT;
+    uint32_t peer_id_count = active_peer_ids_load(skip, peer_ids, BLE_GAP_DEVICE_IDENTITIES_MAX_COUNT);
 
-    ret_code_t err_code = pm_peer_id_list(peer_ids, &peer_id_count, PM_PEER_ID_INVALID, skip);
-    APP_ERROR_CHECK(err_code);
-
-    peer_id_count = peer_id_filter(peer_ids, peer_id_count);
-
-    err_code = pm_device_identities_list_set(peer_ids, peer_id_count);
-    APP_ERROR_CHECK(err_code);
+    ret_code_t err_code = pm_device_identities_list_set(peer_ids, peer_id_count);
+    if (err_code == NRF_ERROR_NOT_FOUND || err_code == BLE_ERROR_GAP_INVALID_BLE_ADDR) {
+        clear_stale_active_peer();
+        (void)pm_device_identities_list_set(NULL, 0);
+        return;
+    }
+    if (err_code != NRF_SUCCESS
+        && err_code != BLE_ERROR_GAP_DEVICE_IDENTITIES_IN_USE
+        && err_code != NRF_ERROR_INVALID_STATE
+        && err_code != NRF_ERROR_INVALID_PARAM) {
+        APP_ERROR_CHECK(err_code);
+    }
 }
 
 /**
@@ -194,6 +254,7 @@ static void ble_disconnect(app_sched_event_handler_t on_disconnect)
     // In case of advertising
     if (m_advertising.adv_mode_current != BLE_ADV_MODE_IDLE) {
         (void)sd_ble_gap_adv_stop(m_advertising.adv_handle);
+        m_advertising.adv_mode_current = BLE_ADV_MODE_IDLE;
     }
 
     if (m_conn_handle != BLE_CONN_HANDLE_INVALID) {
@@ -267,15 +328,28 @@ static void set_default_device_name(void)
 
     char device_name[24];
     memset(device_name, 0, sizeof(device_name));
+    size_t suffix_len = 0;
+#ifdef MACADDR_SEPRATOR
+    suffix_len += 7; // '_' + 6 hex MAC chars
+#endif
+#ifdef MULTI_DEVICE_SWITCH
+    suffix_len += 2; // '_' + channel digit
+#endif
+    size_t max_base = (18 > suffix_len) ? (18 - suffix_len) : 0;
+
 #ifdef MACADDR_SEPRATOR
     size_t orig_len = strlen(DEVICE_NAME);
-    if (orig_len <= 12) {
+    if (orig_len <= max_base) {
         get_device_name(device_name, (int)orig_len);
-    } else {
-        strncpy(device_name, DEVICE_NAME, 12);
+    } else if (max_base > 0) {
+        strncpy(device_name, DEVICE_NAME, max_base);
+        device_name[max_base] = '\0';
     }
 #else
-    strncpy(device_name, DEVICE_NAME, 16);
+    if (max_base > 0) {
+        strncpy(device_name, DEVICE_NAME, max_base);
+        device_name[max_base] = '\0';
+    }
 #endif
 #ifdef MULTI_DEVICE_SWITCH
     uint8_t dev_id = switch_device_get_id();
@@ -329,6 +403,9 @@ static void set_device_name(void)
  */
 void delete_bonds(void)
 {
+    if (storage_degraded()) {
+        return;
+    }
     ble_disconnect(NULL);
 
     ret_code_t err_code = pm_peers_delete();
@@ -343,8 +420,23 @@ void delete_bonds(void)
  * @brief 禁用后重新启用广播
  * 
  */
+static void advertising_update_data(void);
+
+static void adv_stop_if_active(void)
+{
+    if (m_advertising_initialized && m_advertising.adv_mode_current != BLE_ADV_MODE_IDLE) {
+        (void)sd_ble_gap_adv_stop(m_advertising.adv_handle);
+        m_advertising.adv_mode_current = BLE_ADV_MODE_IDLE;
+    }
+}
+
 static void reenable_advertising()
 {
+    adv_stop_if_active();
+
+    // Refresh advertising payload flags/name before restarting advertising.
+    advertising_update_data();
+
     // set whitelist
     whitelist_set(PM_PEER_ID_LIST_SKIP_NO_ID_ADDR);
 
@@ -356,7 +448,9 @@ static void reenable_advertising()
 
     if (m_conn_handle == BLE_CONN_HANDLE_INVALID) {
         ret_code_t ret = ble_advertising_start(&m_advertising, BLE_ADV_MODE_FAST);
-        APP_ERROR_CHECK(ret);
+        if (ret != NRF_SUCCESS && ret != NRF_ERROR_INVALID_STATE) {
+            APP_ERROR_CHECK(ret);
+        }
     }
 }
 
@@ -367,14 +461,25 @@ static void reenable_advertising()
  */
 static void set_gap_addr_by_id(uint8_t id)
 {
+    adv_stop_if_active();
+
     ble_gap_addr_t gap_addr;
     ret_code_t ret = sd_ble_gap_addr_get(&gap_addr);
-    APP_ERROR_CHECK(ret);
+    if (ret != NRF_SUCCESS) {
+        return;
+    }
 
     gap_addr.addr[0] = (gap_addr.addr[0] & 0x1F) | ((id & 0x07) << 5);
 
     ret = sd_ble_gap_addr_set(&gap_addr);
-    APP_ERROR_CHECK(ret);
+    if (ret == NRF_ERROR_INVALID_STATE && m_advertising_initialized) {
+        (void)sd_ble_gap_adv_stop(m_advertising.adv_handle);
+        m_advertising.adv_mode_current = BLE_ADV_MODE_IDLE;
+        ret = sd_ble_gap_addr_set(&gap_addr);
+    }
+    if (ret != NRF_SUCCESS && ret != NRF_ERROR_INVALID_STATE) {
+        APP_ERROR_CHECK(ret);
+    }
 }
 
 static void advertising_update_data(void)
@@ -402,26 +507,40 @@ static void advertising_update_data(void)
             &m_advertising.adv_data.adv_data.len);
     }
     APP_ERROR_CHECK(err_code);
-
-    err_code = ble_advertising_advdata_update(&m_advertising, &m_advertising.adv_data, true);
-    if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE) {
-        APP_ERROR_CHECK(err_code);
-    }
 }
 
 void ble_device_name_refresh(void)
 {
+    if (storage_degraded()) {
+        return;
+    }
     set_device_name();
-    if (m_advertising_initialized && m_conn_handle == BLE_CONN_HANDLE_INVALID) {
+    if (!m_advertising_initialized) {
+        return;
+    }
+    if (m_conn_handle != BLE_CONN_HANDLE_INVALID) {
+        // Advertising is idle while connected; update encoded adv payload for the next adv cycle.
         advertising_update_data();
+        return;
+    }
+    ble_adv_mode_t prev_mode = m_advertising.adv_mode_current;
+    adv_stop_if_active();
+    advertising_update_data();
+    if (prev_mode != BLE_ADV_MODE_IDLE) {
+        ret_code_t err_code = ble_advertising_start(&m_advertising, prev_mode);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE) {
+            APP_ERROR_CHECK(err_code);
+        }
     }
 }
 
 static void switch_device_select_after(void* p_data, uint16_t len)
 {
+    adv_stop_if_active();
+
+    m_peer_id = switch_storage->peers_id[switch_storage->id];
     set_gap_addr_by_id(switch_storage->id);
     set_device_name();
-    advertising_update_data();
 
     reenable_advertising();
     // 触发蓝牙设备通道切换事件
@@ -435,9 +554,16 @@ static void switch_device_select_after(void* p_data, uint16_t len)
  */
 void switch_device_select(uint8_t id)
 {
-    // 如果重复切换或超出范围，则直接退出，不做任何操作
-    if (id >= MAX_HOST_COUNT || id == switch_storage->id)
+    if (storage_degraded() || id >= MAX_HOST_COUNT)
         return;
+
+    if (id == switch_storage->id) {
+        if (m_conn_handle == BLE_CONN_HANDLE_INVALID) {
+            reenable_advertising();
+            trig_event_param(USER_EVT_BLE_DEVICE_SWITCH, switch_storage->id);
+        }
+        return;
+    }
 
     switch_storage->id = id;
     switch_device_id_update();
@@ -447,8 +573,12 @@ void switch_device_select(uint8_t id)
 
 static void switch_device_rebond_after(void* p_data, uint16_t size)
 {
-    pm_peer_delete(switch_storage->peers_id[switch_storage->id]);
+    pm_peer_id_t old_peer = switch_storage->peers_id[switch_storage->id];
+    if (old_peer != PM_PEER_ID_INVALID) {
+        (void)pm_peer_delete(old_peer);
+    }
     switch_storage->peers_id[switch_storage->id] = PM_PEER_ID_INVALID;
+    m_peer_id = PM_PEER_ID_INVALID;
     switch_device_id_update();
     reenable_advertising();
 }
@@ -459,19 +589,34 @@ static void switch_device_rebond_after(void* p_data, uint16_t size)
  */
 void switch_device_rebond()
 {
+    if (storage_degraded()) {
+        return;
+    }
     ble_disconnect(switch_device_rebond_after);
 }
 /**
- * @brief 切换连接设备初始化.
- *
- * 读取存储的当前连接设备ID，并激活为当前连接设备
+ * @brief Validate and apply active channel state in RAM (deferred flash persist for post-boot_check).
  */
-static void switch_device_init()
+static void switch_device_load(void)
 {
-    if (switch_storage->magic != SWITCH_ID_MAGIC) {
-        switch_device_reset();
+    if (switch_storage->magic != SWITCH_ID_MAGIC || switch_storage->id >= MAX_HOST_COUNT) {
+        switch_storage->id = 0;
+        switch_storage->magic = SWITCH_ID_MAGIC;
+        for (int8_t i = 0; i < MAX_HOST_COUNT; i++) {
+            switch_storage->peers_id[i] = PM_PEER_ID_INVALID;
+        }
+        s_switch_device_needs_persist = true;
     }
+    m_peer_id = switch_storage->peers_id[switch_storage->id];
     set_gap_addr_by_id(switch_storage->id);
+}
+
+static void switch_device_persist_if_needed(void)
+{
+    if (s_switch_device_needs_persist) {
+        s_switch_device_needs_persist = false;
+        switch_device_id_update();
+    }
 }
 
 /**
@@ -493,17 +638,25 @@ static void switch_device_update(pm_peer_id_t peer_id)
  */
 void advertising_start(bool erase_bonds)
 {
+    if (storage_degraded()) {
+        return;
+    }
     if (erase_bonds) {
         delete_bonds();
         // Advertising is started by PM_EVT_PEERS_DELETE_SUCCEEDED event.
     } else {
 #ifdef MULTI_DEVICE_SWITCH
-        switch_device_init();
+        switch_device_load();
+        switch_device_persist_if_needed();
 #endif
+        set_device_name();
+        advertising_update_data();
         whitelist_set(PM_PEER_ID_LIST_SKIP_NO_ID_ADDR);
 
         ret_code_t ret = ble_advertising_start(&m_advertising, BLE_ADV_MODE_FAST);
-        APP_ERROR_CHECK(ret);
+        if (ret != NRF_SUCCESS && ret != NRF_ERROR_INVALID_STATE) {
+            APP_ERROR_CHECK(ret);
+        }
     }
 }
 
@@ -515,15 +668,20 @@ void advertising_start(bool erase_bonds)
  */
 void advertising_restart(ble_adv_mode_t mode, bool whitelist)
 {
-    if (m_conn_handle == BLE_CONN_HANDLE_INVALID) {
-        sd_ble_gap_adv_stop(m_advertising.adv_handle);
-        ble_advertising_start(&m_advertising, mode);
-    } else {
-        sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+    if (storage_degraded()) {
+        return;
     }
-
-    if (!whitelist) {
-        ble_advertising_restart_without_whitelist(&m_advertising);
+    if (m_conn_handle == BLE_CONN_HANDLE_INVALID) {
+        adv_stop_if_active();
+        advertising_update_data();
+        if (!whitelist) {
+            m_advertising.adv_mode_current = mode;
+            (void)ble_advertising_restart_without_whitelist(&m_advertising);
+        } else {
+            (void)ble_advertising_start(&m_advertising, mode);
+        }
+    } else {
+        (void)sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
     }
 }
 
@@ -533,8 +691,13 @@ void advertising_restart(ble_adv_mode_t mode, bool whitelist)
  */
 void advertising_slow()
 {
+    if (storage_degraded()) {
+        return;
+    }
     ret_code_t ret = ble_advertising_start(&m_advertising, BLE_ADV_MODE_SLOW);
-    APP_ERROR_CHECK(ret);
+    if (ret != NRF_SUCCESS && ret != NRF_ERROR_INVALID_STATE) {
+        APP_ERROR_CHECK(ret);
+    }
 }
 
 static void advertising_config_get(ble_adv_modes_config_t* p_config)
@@ -545,7 +708,7 @@ static void advertising_config_get(ble_adv_modes_config_t* p_config)
 #else
     p_config->ble_adv_whitelist_enabled = false;
 #endif
-    p_config->ble_adv_directed_high_duty_enabled = true;
+    p_config->ble_adv_directed_high_duty_enabled = false;
     p_config->ble_adv_directed_enabled = false;
     p_config->ble_adv_directed_interval = 0;
     p_config->ble_adv_directed_timeout = 0;
@@ -617,6 +780,7 @@ static void pm_evt_handler(pm_evt_t const* p_evt)
         break;
 
     case PM_EVT_BONDED_PEER_CONNECTED:
+        m_peer_id = p_evt->peer_id;
         trig_event_param(USER_EVT_BLE_STATE_CHANGE, BLE_STATE_CONNECTED);
         break;
 
@@ -625,9 +789,11 @@ static void pm_evt_handler(pm_evt_t const* p_evt)
         break;
 
     case PM_EVT_PEER_DATA_UPDATE_SUCCEEDED:
-        if (p_evt->params.peer_data_update_succeeded.flash_changed && (p_evt->params.peer_data_update_succeeded.data_id == PM_PEER_DATA_ID_BONDING)) {
-            // Note: You should check on what kind of white list policy your application should use.
-
+        if (p_evt->params.peer_data_update_succeeded.flash_changed
+            && (p_evt->params.peer_data_update_succeeded.data_id == PM_PEER_DATA_ID_BONDING)
+            && (m_advertising.adv_mode_current == BLE_ADV_MODE_IDLE)) {
+            // Only update the SoftDevice whitelist when advertising is idle to avoid
+            // BLE_ERROR_GAP_WHITELIST_IN_USE during channel transitions.
             whitelist_set(PM_PEER_ID_LIST_SKIP_NO_ID_ADDR);
         }
         break;
@@ -638,6 +804,16 @@ static void pm_evt_handler(pm_evt_t const* p_evt)
         pm_conn_sec_config_reply(p_evt->conn_handle, &conn_sec_config);
         break;
     }
+
+    case PM_EVT_LOCAL_DB_CACHE_APPLIED:
+        // Re-push battery level once Peer Manager restores CCCD state on bonded reconnect.
+        battery_service_on_db_cache_applied(p_evt->conn_handle);
+        break;
+
+    case PM_EVT_LOCAL_DB_CACHE_APPLY_FAILED:
+        // Notify bonded hosts (e.g. macOS) when GATT attribute handles shifted after FW upgrade.
+        pm_local_database_has_changed();
+        break;
 
     default:
         break;
@@ -719,6 +895,7 @@ static void dis_init(void)
     ret_code_t err_code;
     ble_dis_init_t dis_init_obj;
     ble_dis_pnp_id_t pnp_id;
+    static char serial_str[13];
 
     pnp_id.vendor_id_source = PNP_ID_VENDOR_ID_SOURCE;
     pnp_id.vendor_id = VENDOR_ID;
@@ -728,9 +905,25 @@ static void dis_init(void)
     memset(&dis_init_obj, 0, sizeof(dis_init_obj));
 
     ble_srv_ascii_to_utf8(&dis_init_obj.manufact_name_str, MANUFACTURER_NAME);
+    ble_srv_ascii_to_utf8(&dis_init_obj.model_num_str, PRODUCT);
+    ble_srv_ascii_to_utf8(&dis_init_obj.hw_rev_str, HARDWARE_REV_STR);
+    ble_srv_ascii_to_utf8(&dis_init_obj.fw_rev_str, STRINGIFY(VERSION));
+
+    ble_gap_addr_t gap_addr;
+    if (sd_ble_gap_addr_get(&gap_addr) == NRF_SUCCESS) {
+        static const char hex_chars[] = "0123456789ABCDEF";
+        for (uint8_t i = 0; i < BLE_GAP_ADDR_LEN; i++) {
+            uint8_t byte = gap_addr.addr[BLE_GAP_ADDR_LEN - 1 - i];
+            serial_str[i * 2] = hex_chars[(byte >> 4) & 0x0F];
+            serial_str[i * 2 + 1] = hex_chars[byte & 0x0F];
+        }
+        serial_str[12] = '\0';
+        ble_srv_ascii_to_utf8(&dis_init_obj.serial_num_str, serial_str);
+    }
+
     dis_init_obj.p_pnp_id = &pnp_id;
 
-    dis_init_obj.dis_char_rd_sec = SEC_JUST_WORKS;
+    dis_init_obj.dis_char_rd_sec = SEC_CURRENT;
 
     err_code = ble_dis_init(&dis_init_obj);
     APP_ERROR_CHECK(err_code);
@@ -760,6 +953,13 @@ static void dfu_init(void)
  */
 static void conn_params_error_handler(uint32_t nrf_error)
 {
+    if (nrf_error == NRF_ERROR_INVALID_STATE
+        || nrf_error == BLE_ERROR_INVALID_CONN_HANDLE
+        || nrf_error == NRF_ERROR_BUSY
+        || nrf_error == NRF_ERROR_NO_MEM
+        || nrf_error == NRF_ERROR_TIMEOUT) {
+        return;
+    }
     APP_ERROR_HANDLER(nrf_error);
 }
 
@@ -832,7 +1032,12 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
 
         err_code = pm_whitelist_get(whitelist_addrs, &addr_cnt,
             whitelist_irks, &irk_cnt);
-        APP_ERROR_CHECK(err_code);
+        if (err_code == NRF_ERROR_NOT_FOUND) {
+            addr_cnt = 0;
+            irk_cnt = 0;
+        } else {
+            APP_ERROR_CHECK(err_code);
+        }
         // Set the correct identities list (no excluding peers with no Central Address Resolution).
         identities_set(PM_PEER_ID_LIST_SKIP_NO_IRK);
 
@@ -842,23 +1047,33 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
             addr_cnt,
             whitelist_irks,
             irk_cnt);
-        APP_ERROR_CHECK(err_code);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE) {
+            APP_ERROR_CHECK(err_code);
+        }
     } break; //BLE_ADV_EVT_WHITELIST_REQUEST
 
     case BLE_ADV_EVT_PEER_ADDR_REQUEST: {
         pm_peer_data_bonding_t peer_bonding_data;
+        pm_peer_id_t active_peer = m_peer_id;
+#ifdef MULTI_DEVICE_SWITCH
+        active_peer = switch_storage->peers_id[switch_storage->id];
+#endif
 
         // Only Give peer address if we have a handle to the bonded peer.
-        if (m_peer_id != PM_PEER_ID_INVALID) {
-            err_code = pm_peer_data_bonding_load(m_peer_id, &peer_bonding_data);
-            if (err_code != NRF_ERROR_NOT_FOUND) {
-                APP_ERROR_CHECK(err_code);
-
+        if (active_peer != PM_PEER_ID_INVALID) {
+            err_code = pm_peer_data_bonding_load(active_peer, &peer_bonding_data);
+            if (err_code == NRF_ERROR_NOT_FOUND) {
+                clear_stale_active_peer();
+            } else if (err_code == NRF_SUCCESS) {
                 // Manipulate identities to exclude peers with no Central Address Resolution.
                 identities_set(PM_PEER_ID_LIST_SKIP_ALL);
 
                 ble_gap_addr_t* p_peer_addr = &(peer_bonding_data.peer_ble_id.id_addr_info);
                 err_code = ble_advertising_peer_addr_reply(&m_advertising, p_peer_addr);
+                if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE) {
+                    APP_ERROR_CHECK(err_code);
+                }
+            } else {
                 APP_ERROR_CHECK(err_code);
             }
         }
@@ -877,26 +1092,36 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
  * @param old 旧的句柄
  * @param new 新的句柄
  */
+static uint8_t current_tx = 2; // +4 dBm default
+
+/**
+ * @brief BLE 连接句柄改变处理器
+ * 
+ * @param old 旧的句柄
+ * @param new 新的句柄
+ */
 static void ble_conn_handle_change(uint16_t old, uint16_t new)
 {
     if (old != BLE_CONN_HANDLE_INVALID) {
         sd_ble_gap_rssi_stop(old);
     }
     if (new != BLE_CONN_HANDLE_INVALID) {
+        current_tx = 2; // +4 dBm
+        (void)sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_CONN, new, 4);
         sd_ble_gap_rssi_start(new, 5, 5);
     }
 }
 
-static uint8_t current_tx = 6; // 0dbm default.
-
 /**
- * @brief RSSI 改变事件处理器
+ * @brief RSSI 改变事件处理器 (floor at 0 dBm so RF link stays resilient)
  * 
  * @param rssi 
  */
 static void ble_rssi_change(int8_t rssi)
 {
-    const int8_t tx_power_table[] = { -40, -20, -16, -12, -8, -4, 0, 3, 4 };
+    const int8_t tx_power_table[] = { 0, 3, 4 };
+    if (m_conn_handle == BLE_CONN_HANDLE_INVALID)
+        return;
     if (rssi >= -65 && current_tx > 0)
         current_tx--;
     else if (rssi <= -80 && current_tx < sizeof(tx_power_table) - 1)
@@ -904,7 +1129,7 @@ static void ble_rssi_change(int8_t rssi)
     else
         return;
 
-    sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_CONN, m_conn_handle, tx_power_table[current_tx]);
+    (void)sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_CONN, m_conn_handle, tx_power_table[current_tx]);
 }
 #else
 #define ble_conn_handle_change(A, B)
@@ -949,7 +1174,10 @@ static void ble_evt_handler(ble_evt_t const* p_ble_evt, void* p_context)
             .tx_phys = BLE_GAP_PHY_AUTO,
         };
         err_code = sd_ble_gap_phy_update(p_ble_evt->evt.gap_evt.conn_handle, &phys);
-        APP_ERROR_CHECK(err_code);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE
+            && err_code != BLE_ERROR_INVALID_CONN_HANDLE) {
+            APP_ERROR_CHECK(err_code);
+        }
     } break;
 
     case BLE_GATTS_EVT_HVN_TX_COMPLETE:
@@ -960,14 +1188,20 @@ static void ble_evt_handler(ble_evt_t const* p_ble_evt, void* p_context)
         // Disconnect on GATT Client timeout event.
         err_code = sd_ble_gap_disconnect(p_ble_evt->evt.gattc_evt.conn_handle,
             BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
-        APP_ERROR_CHECK(err_code);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE
+            && err_code != BLE_ERROR_INVALID_CONN_HANDLE) {
+            APP_ERROR_CHECK(err_code);
+        }
         break;
 
     case BLE_GATTS_EVT_TIMEOUT:
         // Disconnect on GATT Server timeout event.
         err_code = sd_ble_gap_disconnect(p_ble_evt->evt.gatts_evt.conn_handle,
             BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
-        APP_ERROR_CHECK(err_code);
+        if (err_code != NRF_SUCCESS && err_code != NRF_ERROR_INVALID_STATE
+            && err_code != BLE_ERROR_INVALID_CONN_HANDLE) {
+            APP_ERROR_CHECK(err_code);
+        }
         break;
 
     case BLE_GAP_EVT_AUTH_KEY_REQUEST:
@@ -1051,6 +1285,12 @@ static void peer_manager_init(void)
  */
 static void ble_advertising_error_handler(uint32_t nrf_error)
 {
+    if (nrf_error == NRF_ERROR_INVALID_STATE
+        || nrf_error == BLE_ERROR_INVALID_CONN_HANDLE
+        || nrf_error == NRF_ERROR_CONN_COUNT
+        || nrf_error == NRF_ERROR_NO_MEM) {
+        return;
+    }
     APP_ERROR_HANDLER(nrf_error);
 }
 
@@ -1072,6 +1312,9 @@ static void advertising_init(void)
     init.advdata.uuids_complete.uuid_cnt = sizeof(m_adv_uuids) / sizeof(m_adv_uuids[0]);
     init.advdata.uuids_complete.p_uuids = m_adv_uuids;
 
+    init.srdata.uuids_complete.uuid_cnt = sizeof(m_sr_uuids) / sizeof(m_sr_uuids[0]);
+    init.srdata.uuids_complete.p_uuids = m_sr_uuids;
+
     advertising_config_get(&init.config);
 
     init.evt_handler = on_adv_evt;
@@ -1082,15 +1325,16 @@ static void advertising_init(void)
 
     m_advertising_initialized = 1;
     ble_advertising_conn_cfg_tag_set(&m_advertising, APP_BLE_CONN_CFG_TAG);
-#ifdef HIGH_TX_POWER
-    //更改发射功率到+4dBm
+    // Use +4 dBm for advertising so reconnects after link loss succeed reliably.
     err_code = sd_ble_gap_tx_power_set(BLE_GAP_TX_POWER_ROLE_ADV, m_advertising.adv_handle, 4);
     APP_ERROR_CHECK(err_code);
-#endif
 }
 
 void ble_passkey_send(uint8_t const* p_key)
 {
+    if (storage_degraded()) {
+        return;
+    }
     ret_code_t err_code = sd_ble_gap_auth_key_reply(
         m_conn_handle,
         BLE_GAP_AUTH_KEY_TYPE_PASSKEY,
@@ -1101,7 +1345,13 @@ void ble_passkey_send(uint8_t const* p_key)
 
 void ble_services_init()
 {
+    if (storage_degraded()) {
+        return;
+    }
     peer_manager_init();
+#ifdef MULTI_DEVICE_SWITCH
+    switch_device_load();
+#endif
     gap_params_init();
     gatt_init();
     advertising_init();

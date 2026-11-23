@@ -2,13 +2,17 @@
 #include <string.h>
 
 #include "hid_configuration.h"
+#include "app_timer.h"
 #include "nordic_common.h"
+#include "nrf_soc.h"
 #include "usb_comm.h"
 #include "util.h"
 #include "ble_gap.h"
+#include "../main.h"
 
 #include "action.h"
 #include "data_storage.h"
+#include "keyboard_battery.h"
 #include "keymap.h"
 #include "store_config.h"
 #include "../ble/ble_services.h"
@@ -84,6 +88,17 @@ static struct hid_config_section* hid_config_get(uint8_t id)
 
 static const struct host_driver* last_driver = NULL;
 static uint8_t current_packet_size = 56;
+APP_TIMER_DEF(m_format_reset_timer);
+static bool s_format_timer_created = false;
+
+static void format_reset_timer_handler(void* p_context)
+{
+    UNUSED_PARAMETER(p_context);
+    (void)sd_power_gpregret_clr(1, 0xFF);
+    (void)sd_power_gpregret_set(1, STORAGE_FORMAT_MAGIC);
+    wdt_feed_raw();
+    NVIC_SystemReset();
+}
 
 /**
  * @brief 响应HID成功命令
@@ -96,10 +111,15 @@ void hid_response_success(uint8_t len, uint8_t* data)
     if (last_driver == NULL || !last_driver->driver_working())
         return;
 
-    uint8_t buff[63];
+    uint8_t buff[62];
+    if (len > sizeof(buff) - 2U) {
+        len = sizeof(buff) - 2U;
+    }
     buff[0] = 0x00;
     buff[1] = len;
-    memcpy(&buff[2], data, len);
+    if (len > 0 && data != NULL) {
+        memcpy(&buff[2], data, len);
+    }
     last_driver->send_packet(PACKET_CONF, len + 2, buff);
 }
 
@@ -145,10 +165,31 @@ static void send_information_sub_1()
 
     ble_gap_addr_t ble_addr;
     sd_ble_gap_addr_get(&ble_addr);
-    memcpy(info, ble_addr.addr, sizeof(ble_addr));
+    memcpy(info, ble_addr.addr, BLE_GAP_ADDR_LEN);
 
     info[6] = current_packet_size;
-    info[7] = 0;
+    info[7] = storage_degraded() ? 0x01U : 0x00U;
+    hid_response_success(sizeof(info), info);
+}
+
+#define FW_CAP_LED_COLORS      (1UL << 0) /* Config ID 0x15 */
+#define FW_CAP_BATTERY_STATUS  (1UL << 1) /* Config ID 0x16 */
+#define FW_CAP_MACOS_KEYS      (1UL << 2) /* 0xE8..0xEB F3-F6 */
+#define FW_CAP_FORMAT_DEGRADED (1UL << 3) /* Cmd 0x3C + info[7] degraded bit */
+#define FW_CAP_FDS_RETRY_QUEUE (1UL << 4) /* FDS_OP_QUEUE_SIZE=8 + retry queue */
+
+static void send_information_sub_2(void)
+{
+    uint32_t caps = FW_CAP_BATTERY_STATUS | FW_CAP_MACOS_KEYS | FW_CAP_FORMAT_DEGRADED | FW_CAP_FDS_RETRY_QUEUE;
+#ifdef CONFIG_STORAGE
+    caps |= FW_CAP_LED_COLORS;
+#endif
+    uint8_t info[4] = {
+        (uint8_t)(caps & 0xFFU),
+        (uint8_t)((caps >> 8) & 0xFFU),
+        (uint8_t)((caps >> 16) & 0xFFU),
+        (uint8_t)((caps >> 24) & 0xFFU),
+    };
     hid_response_success(sizeof(info), info);
 }
 
@@ -235,6 +276,15 @@ static void get_all_fns(uint8_t offset)
  */
 static void get_single_config(uint8_t id)
 {
+    if (id == 0x16) {
+        uint8_t buf[3] = {
+            battery_info.percentage,
+            (uint8_t)(battery_info.voltage & 0xFF),
+            (uint8_t)((battery_info.voltage >> 8) & 0xFF),
+        };
+        hid_response_success(sizeof(buf), buf);
+        return;
+    }
 #ifdef CONFIG_STORAGE
     if (id == 0x13) {
         uint8_t buf[1 + MAX_CUSTOM_NAME_BYTES] = { 0 };
@@ -245,6 +295,12 @@ static void get_single_config(uint8_t id)
     if (id == 0x14) {
         uint8_t buf[CHANNEL_PROFILE_COUNT] = { 0 };
         store_config_get_channel_profiles(buf);
+        hid_response_success(sizeof(buf), buf);
+        return;
+    }
+    if (id == 0x15) {
+        uint8_t buf[LED_COLOR_COUNT * 3] = { 0 };
+        store_config_get_led_colors(buf);
         hid_response_success(sizeof(buf), buf);
         return;
     }
@@ -367,6 +423,10 @@ static void set_all_fns(uint8_t id, uint8_t len, uint8_t* data)
  */
 static void set_single_config(uint8_t id, uint8_t len, uint8_t* data)
 {
+    if (id == 0x16) {
+        hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        return;
+    }
 #ifdef CONFIG_STORAGE
     if (id == 0x13) {
         bool overflow = false;
@@ -381,6 +441,16 @@ static void set_single_config(uint8_t id, uint8_t len, uint8_t* data)
         if (len != CHANNEL_PROFILE_COUNT) {
             hid_response_generic(HID_RESP_WRITE_OVERFLOW);
         } else if (store_config_set_channel_profiles(data)) {
+            hid_response_generic(HID_RESP_SUCCESS);
+        } else {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        }
+        return;
+    }
+    if (id == 0x15) {
+        if (len != LED_COLOR_COUNT * 3) {
+            hid_response_generic(HID_RESP_WRITE_OVERFLOW);
+        } else if (store_config_set_led_colors(data)) {
             hid_response_generic(HID_RESP_SUCCESS);
         } else {
             hid_response_generic(HID_RESP_PARAMETER_ERROR);
@@ -426,8 +496,7 @@ static void set_all_macro(uint8_t id, uint8_t len, uint8_t* data)
  */
 static void write_data(uint8_t type)
 {
-    storage_write(type);
-    hid_response_generic(HID_RESP_SUCCESS);
+    hid_response_generic(storage_write(type) ? HID_RESP_SUCCESS : HID_RESP_INTERNAL_ERROR);
 }
 
 /**
@@ -453,7 +522,11 @@ static void read_data(uint8_t type)
 static void reset_data(uint8_t type)
 {
     storage_delete(type);
-    read_data(type);
+    if (type & 0x08) {
+        ble_device_name_refresh();
+        keyboard_profile_apply_active();
+    }
+    hid_response_generic(HID_RESP_SUCCESS);
 }
 
 /**
@@ -480,6 +553,9 @@ void hid_on_recv(const struct host_driver* driver, uint8_t command, uint8_t len,
             break;
         case 1:
             send_information_sub_1();
+            break;
+        case 2:
+            send_information_sub_2();
             break;
         default:
             hid_response_generic(HID_RESP_PARAMETER_ERROR);
@@ -536,16 +612,53 @@ void hid_on_recv(const struct host_driver* driver, uint8_t command, uint8_t len,
             set_single_fn(data[0], UINT16_READ(data, 1));
         break;
     case HID_CMD_SET_ALL_KEYS:
-        set_all_keys(data[0], len - 1, &data[1]);
+        if (len < 1 || (uint8_t)(len - 1) > MAX_HID_PACKET_SIZE) {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        } else {
+            set_all_keys(data[0], len - 1, &data[1]);
+        }
         break;
     case HID_CMD_SET_ALL_FNS:
-        set_all_fns(data[0], len - 1, &data[1]);
+        if (len < 1 || (uint8_t)(len - 1) > MAX_HID_PACKET_SIZE) {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        } else {
+            set_all_fns(data[0], len - 1, &data[1]);
+        }
         break;
     case HID_CMD_SET_SINGLE_CONFIG:
-        set_single_config(data[0], len - 1, &data[1]);
+        if (len < 1) {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        } else {
+            set_single_config(data[0], len - 1, &data[1]);
+        }
         break;
     case HID_CMD_SET_ALL_MACRO:
-        set_all_macro(data[0], len - 1, &data[1]);
+        if (len < 1 || (uint8_t)(len - 1) > MAX_HID_PACKET_SIZE) {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        } else {
+            set_all_macro(data[0], len - 1, &data[1]);
+        }
+        break;
+    case HID_CMD_FORMAT_STORAGE:
+        if (len != 4 || data[0] != 0x46U || data[1] != 0x44U || data[2] != 0x53U || data[3] != 0x21U) {
+            hid_response_generic(HID_RESP_PARAMETER_ERROR);
+        } else {
+            if (!s_format_timer_created) {
+                if (app_timer_create(&m_format_reset_timer, APP_TIMER_MODE_SINGLE_SHOT, format_reset_timer_handler) == NRF_SUCCESS) {
+                    s_format_timer_created = true;
+                }
+            }
+            if (!s_format_timer_created) {
+                hid_response_generic(HID_RESP_INTERNAL_ERROR);
+            } else {
+                (void)app_timer_stop(m_format_reset_timer);
+                if (app_timer_start(m_format_reset_timer, APP_TIMER_TICKS(200), NULL) == NRF_SUCCESS) {
+                    hid_response_generic(HID_RESP_SUCCESS);
+                } else {
+                    hid_response_generic(HID_RESP_INTERNAL_ERROR);
+                }
+            }
+        }
         break;
     case HID_CMD_READ_CONFIG:
         if (len != 1)

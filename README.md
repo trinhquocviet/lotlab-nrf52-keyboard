@@ -1,176 +1,67 @@
 # nrf52-keyboard
+
+**English** | [Tiếng Việt](README.vi.md) | [中文](README.zh.md)
+
 ![Build Status](https://api.travis-ci.org/Lotlab/nrf52-keyboard.svg?branch=master)
 
 ## Overview
 
-This is a TMK based keyboard firmware for nRF52 series, now support both nRF52810 and nRF52832. Firmware for nRF51822 see [here](https://github.com/Lotlab/nrf51822-keyboard).
+This is the custom version mainly focus on lot60BLE by Lotlab, a TMK-based keyboard firmware for the Nordic nRF52 series (supporting both **nRF52810** and **nRF52832**), using nRF5 SDK 15.3 as the low-level hardware driver and TMK as the upper-layer keyboard logic.
 
-## Directory Structure
-
-- application: contians the bootloader and application for nrf52
-  - main: main program for nrf52
-    - src: source
-      - ble: bluetooth related code 
-      - config: sdk config
-      - driver: driver for peripheral device
-      - keyboard: keyboard logic 
-      - protocol: communication protocol
-      - tmk: tmk adaptor
-    - project
-  - bootloader: bootloader for nrf52
-    - project
-- doc: documents
-- keyboard: keyboard config 
-- SDK: directory for placing nrf SDK
-- template: nrf SDK makefile template
-- tmk: tmk source code
-- usb: code for ch554
-
-## Code Branch
-
-- Master: is not stable, may contains some critical bug.
-- Develop: is not stable, including some unfinished feature, may not pass compile.
-
-If you want to use this project in your major keyboard, please see the Release page.
+The original and official firmware look at here [Lotlab/nrf52-keyboard](https://github.com/Lotlab/nrf52-keyboard).
 
 ## Highlights
 
-- BLE/USB dual mode
-- USB NKRO
-- Macro support
-- Dynamic keymap/macro configuration
-- Battery level upload
-- Mousekey and media key support
-- Low power comsumption. (~200ua when all LED off in Lot60-BLE)
-- Support rotary encoder and other peripheral device (see driver directory)
-- Highly customable event system
+- **BLE / USB dual mode** with USB NKRO, mouse keys, media keys (including macOS F3–F6 consumer usages), and macros
+- **Multi-device BLE switching** — switch between up to 3 paired BLE hosts
+- **Custom UTF-8 BLE device name & per-channel profiles** — The custom name with the affix `_<number>`
+- **Live battery sync** — real-time SAADC sampling with automatic BLE BAS notifications (macOS battery widget sync) and HID battery query (`0x16`)
+- **Customizable ESC RGB status indicators** — per-channel and connection/charging status colours
+- **Dynamic keymap / macro configuration** with auto-loaded factory defaults and FDS timeouts on fresh flash
+- **Low power & nRF52810 optimizations** — ~200 uA idle draw (LEDs off on Lot60-BLE), `DYNAMIC_TX_POWER`, single-register `NRF_P0->IN` matrix scan, and 2 KB reclaimed RAM
+- **Hardened storage & UART** — resilient FDS flash queue with RAM-only fallback and `NRF_UARTE0` EasyDMA + PPI transport
+- **No-jumper flashing & build tooling** — automated build/flash scripts with 5-layer compatibility checks, GCC 12+ support, and software DFU/ISP mode switching
+- **Extensible driver & event system** — rotary encoder, WS2812, OLED, and modular hooks (see `application/main/src/driver/`)
 
-## Hardware supporting
+> Download this custom firmware from the **[Releases](https://github.com/trinhquocviet/lotlab-nrf52-keyboard/releases)** page.
 
-Currently we support both nRF52810 and nRF52832. See keyboard directory for more information.
+## Supported Hardware
 
-## Compile
+Currently supports both **nRF52810** and **nRF52832**. See the `keyboard/` directory for supported keyboard PCBs and revisions.
 
-Firstly, you should download [nRF5 SDK 15.3](https://www.nordicsemi.com/Software-and-Tools/Software/nRF5-SDK/Download#infotabs), decompress it and put it into the SDK folder. The structure of SDK folder will be `SDK/components`, ...
+## Directory Structure
 
-And then, install `gcc-arm-none-eabi-7-2018-q2-update`. Copy the `Makefile.posix.template` or `Makefile.windows.template` to `Makefile.posix` or `Makefile.windows` (depending your OS), then modify the toolchain path in the file to your gcc installed path.
-
-Install [SDCC](http://sdcc.sourceforge.net/) to compile code for CH554. Note: This project require SDCC 4.0 to compile, older version in ubuntu 18.04 and debian 10 will not work.
-
-If you want to compile the bootloader, you should firstly complie the uECC library. See this [article](https://devzone.nordicsemi.com/b/blog/posts/getting-started-with-nordics-secure-dfu-bootloader).
-
-Then, 
-```bash
-cd keyboard/lot60-ble
-make # Compile main program and the USB program
-make bootloader # Compile bootloader
+```text
+.
+├── application              # Bootloader and main application firmware for nRF52
+│   ├── main                 # Main nRF52 application
+│   │   ├── src              # Source code
+│   │   │   ├── ble          # Bluetooth Low Energy (BLE) stack and services
+│   │   │   ├── config       # SDK and hardware configuration
+│   │   │   ├── driver       # Peripheral device drivers
+│   │   │   ├── keyboard     # Keyboard matrix, power, storage, and event logic
+│   │   │   ├── protocol     # UART / HID communication protocol
+│   │   │   └── tmk          # TMK keyboard core adapter
+│   │   └── project          # Build projects and linker scripts
+│   └── bootloader           # Secure DFU bootloader for nRF52
+├── docs                     # Project documentation and guides (EN / VI / ZH)
+├── keyboard                 # Keyboard-specific hardware configs and keymaps (e.g. lot60-ble)
+├── scripts                  # Build, flashing, and software mode-switching helper scripts
+├── SDK                      # Nordic nRF5 SDK 15.3 directory
+├── template                 # nRF SDK Makefile templates
+├── tmk                      # TMK core source code
+├── usb                      # CH554 USB bridge & CMSIS-DAP firmware
+├── Dockerfile
+├── README.md
+└── ...
 ```
 
-We also provide Docker image for you to compile, this image contains toolchain and sdk. 
-```bash
-docker run lotlab/nrf52-keyboard
-```
+## Documentation
 
-## Flashing
+- [Development Guide](docs/development.md) — Branches, toolchain setup, compiling, and flashing
+- [Lot60-BLE Hardware, Mode Switching & Flashing Guide](docs/lot60-ble-guide.md)
+- [Communication Protocol](docs/communicate.md)
+- [External Drivers & Modular Hooks](docs/driver.md)
+- [Keyboard Hooks Reference](docs/hook.md)
+- [Hardware Porting Guide](docs/porting.md)
 
-It's recommend to use DAP-Link to flashing nrf52 chip. If you want to do so, please install [pyocd](https://github.com/mbedmicro/pyOCD). If you want to generate DFU package, you should install [nrfutil](https://github.com/NordicSemiconductor/pc-nrfutil/).
-
-For ch554, you could use the official [flasing utility](http://www.wch.cn/downloads/WCHISPTool_Setup_exe.html) in windows, or third-party [usbisp](https://github.com/rgwan/librech551) in linux.
-
-Type `make help` for all flashing command.
-
-## 概述
-
-这是一个基于nrf52蓝牙键盘的固件，使用了nRF SDK 15.3作为底层硬件驱动，并使用TMK键盘库作为键盘功能的上部实现。
-
-## 目录结构
-- application/ 固件相关
-  - main/ 主程序
-    - src/ 源码
-      - ble/ 蓝牙相关代码
-      - config/ 硬件配置相关
-      - protocol/ 通讯相关
-      - driver/ 外置驱动
-      - tmk/ tmk桥接相关
-    - project/ 工程
-  - bootloader/ 
-    - src/ 源码
-    - project/ 工程
-- keyboard/ 各个键盘实现相关
-- SDK/ nRF52 SDK
-- tmk/ tmk core 相关
-- usb/ USB部分代码
-
-## 分支说明
-
-- Master 分支是不稳定的分支，可能存在一些BUG
-- Develop 分支是更不稳定的分支，可能会出现无法编译通过的问题
-
-若想要日常使用，建议使用Release版本
-
-## 功能亮点
-
-- 蓝牙/USB双模切换
-- USB全键无冲
-- 配列下载更新
-- 电量上传
-- 支持多媒体按键和鼠标键
-- 支持按键宏
-- 耗电量低至200ua（使用lot60-ble硬件在关闭所有灯光条件下测得，不代表所有条件下的状态）
-- 高度自定义的事件系统
-- 支持旋钮、WS2812等外设（详见drivers目录）
-
-## 硬件支持
-
-当前支持nrf52810和nrf52832两种主控硬件，此固件支持的键盘列表见Keyboard目录。
-
-## 编译
-
-首先下载 [nRF5 SDK 15.3](https://www.nordicsemi.com/Software-and-Tools/Software/nRF5-SDK/Download#infotabs), 解压并放入SDK文件夹。
-然后安装 gcc-arm-none-eabi-7-2018-q2-update，将template目录中对应平台的配置文件模板复制一份，重命名为`Makefile.posix`或`Makefile.windows`，修改里面工具路径为你的安装目录。
-
-然后安装 [SDCC](http://sdcc.sourceforge.net/) 用于编译CH554相关代码。注意：需要 SDCC 4.0 及以上版本才可编译，部分操作系统（如ubuntu 18.04, debian 10）内的 SDCC 版本无法满足要求。
-
-我们也提供了Docker镜像方便编译，请使用
-```bash
-docker run lotlab/nrf52-keyboard
-```
-
-### Bootloader 的编译
-参见[这篇文章](https://devzone.nordicsemi.com/nordic/short-range-guides/b/software-development-kit/posts/getting-started-with-nordics-secure-dfu-bootloader)，先编译uECC库，然后再编译Bootloader
-
-### 蓝牙程序和USB控制器的编译
-现在蓝牙和USB控制器程序的Makefile都放在一起了。进入对应的硬件目录，直接make即可。
-
-```bash
-cd keyboard/lot60-ble
-make # 编译主程序和USB控制程序
-make bootloader # 编译bootloader
-```
-
-### 硬件的烧录
-
-对于nrf52，若要通过JLink直接写入，则需要安装JLink的驱动；若使用DAP-Link写入，则需要安装[pyocd](https://github.com/mbedmicro/pyOCD)；若使用蓝牙DFU进行升级，则需要安装[nrfutil](https://github.com/NordicSemiconductor/pc-nrfutil/)
-
-对于ch554，你可以使用官方的[windows烧写工具](http://www.wch.cn/downloads/WCHISPTool_Setup_exe.html)，或三方的[usbisp](https://github.com/rgwan/librech551)烧写。
-
-请使用`make help`查看所有的烧写和打包指令。
-
-### 详细教程
-
-如果对上面的固件编译流程有问题，可参考Lotlab Wiki上的[这篇文章](https://wiki.lotlab.org/page/bluetooth/build-guide/)，或查看`.travis.yml`作为参考。
-
-## 硬件移植
-请参考Keyboard目录下的template移植模板，并查看doc目录下的对应说明。
-
-## Fork Release `v1.2.1.0` (`Lot60-BLE Rev.G`)
-- Added RAM overflow protection (`usb_comm.c`, `data_storage.c`, `macro_player.c`) and reclaimed 2 KB unused heap (`HEAP_SIZE := 0`) on `nRF52810`.
-- Reduced idle CPU wakeups (`ADC_TIMER_PERIOD = 1000 ms`, battery poll `10 s`), enabled `DYNAMIC_TX_POWER`, tuned BLE `SLAVE_LATENCY = 15` / `CONN_SUP_TIMEOUT = 4000 ms`, and optimized matrix scanning (`NRF_P0->IN` single-register read).
-- Auto-loads compiled factory default keymap, Fn table, and FDS timeouts (`600 / 15 / 5 s`) when FDS storage is empty after a fresh flash.
-- Compatible with GCC 12+ (`arm-none-eabi-gcc` 15.x) via `-Wno-array-bounds` in `application/main/project/app.mk`. See `keyboard/lot60-ble/README.md` for full details.
-
-## 捐助
-
-如果你觉得这个工程有帮助到你，为何不请我喝一杯奶茶呢？
-
-![支付宝二维码 donate@lotlab.org](https://raw.githubusercontent.com/Lotlab/mcsgyz/gh-pages/pic/alipay.jpg)

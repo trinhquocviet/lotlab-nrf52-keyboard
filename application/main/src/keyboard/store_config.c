@@ -230,6 +230,43 @@ bool store_config_set_channel_profiles(const uint8_t data[CHANNEL_PROFILE_COUNT]
     return true;
 }
 
+void store_config_get_led_colors(uint8_t out[LED_COLOR_COUNT * 3])
+{
+    if (out == NULL)
+        return;
+    ext_config_t* ext = storage_get_ext_config();
+    if (ext->magic != EXT_CONFIG_MAGIC || ext->version != EXT_CONFIG_VERSION) {
+        memcpy(out, default_led_colors, LED_COLOR_COUNT * 3);
+        return;
+    }
+    memcpy(out, ext->led_colors, LED_COLOR_COUNT * 3);
+}
+
+bool store_config_set_led_colors(const uint8_t data[LED_COLOR_COUNT * 3])
+{
+    if (data == NULL)
+        return false;
+
+    ext_config_t* ext = storage_get_ext_config();
+    ext->magic = EXT_CONFIG_MAGIC;
+    ext->version = EXT_CONFIG_VERSION;
+    memcpy(ext->led_colors, data, LED_COLOR_COUNT * 3);
+
+    trig_event_param(USER_EVT_LED, 0);
+    return true;
+}
+
+uint32_t store_config_get_led_color(uint8_t slot)
+{
+    uint8_t idx = (slot < LED_COLOR_COUNT) ? slot : LED_SLOT_IDLE;
+    const uint8_t* rgb = default_led_colors[idx];
+    ext_config_t* ext = storage_get_ext_config();
+    if (ext->magic == EXT_CONFIG_MAGIC && ext->version == EXT_CONFIG_VERSION) {
+        rgb = ext->led_colors[idx];
+    }
+    return ((uint32_t)rgb[0] << 16) | ((uint32_t)rgb[1] << 8) | (uint32_t)rgb[2];
+}
+
 static bool s_usb_active = false;
 static uint8_t s_ble_id = 0;
 static uint8_t s_last_applied_profile = 0xFF;
